@@ -17,6 +17,15 @@ describe("isValidRepoUrl", () => {
     expect(isValidRepoUrl("not a url")).toBe(false);
     expect(isValidRepoUrl("")).toBe(false);
   });
+
+  it("rejects extra path segments, query, hash, credentials, and ports", () => {
+    expect(isValidRepoUrl("https://github.com/owner/repo/tree/main")).toBe(false);
+    expect(isValidRepoUrl("https://github.com/owner/repo/pulls")).toBe(false);
+    expect(isValidRepoUrl("https://github.com/owner/repo?foo=bar")).toBe(false);
+    expect(isValidRepoUrl("https://github.com/owner/repo#frag")).toBe(false);
+    expect(isValidRepoUrl("https://user:pass@github.com/owner/repo")).toBe(false);
+    expect(isValidRepoUrl("https://github.com:8443/owner/repo")).toBe(false);
+  });
 });
 
 describe("CreateRunBody", () => {

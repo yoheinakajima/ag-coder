@@ -16,12 +16,18 @@ export function isValidRepoUrl(value: string): boolean {
   }
 
   if (url.protocol !== "https:") return false;
+  // Reject embedded credentials, explicit ports, and query/hash — the contract
+  // is strictly `https://github.com/<owner>/<repo>` (optionally `.git`).
+  if (url.username || url.password) return false;
+  if (url.port) return false;
+  if (url.search || url.hash) return false;
 
   const host = url.hostname.toLowerCase();
   if (host !== "github.com" && host !== "www.github.com") return false;
 
   const segments = url.pathname.split("/").filter(Boolean);
-  if (segments.length < 2) return false;
+  // Exactly owner/repo — no extra path segments (e.g. /tree/main, /pulls).
+  if (segments.length !== 2) return false;
 
   const [owner, repoRaw] = segments;
   const repo = repoRaw.replace(/\.git$/, "");
