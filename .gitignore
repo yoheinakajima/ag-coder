@@ -1,0 +1,66 @@
+# ── Build output ──────────────────────────────────────────────────────────────
+dist/
+tmp/
+out-tsc/
+*.tsbuildinfo
+.expo/
+.expo-shared/
+
+# ── Dependencies ──────────────────────────────────────────────────────────────
+node_modules/
+.pythonlibs/
+
+# ── Environment & secrets ─────────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+.venv/
+venv/
+
+# ── Editors & IDEs ────────────────────────────────────────────────────────────
+.idea/
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+*.sublime-workspace
+.project
+.classpath
+.c9/
+*.launch
+.settings/
+
+# ── OS ────────────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+
+# ── Logs ──────────────────────────────────────────────────────────────────────
+*.log
+npm-debug.log*
+yarn-error.log*
+
+# ── Test & coverage ───────────────────────────────────────────────────────────
+coverage/
+.nyc_output/
+
+# ── Replit internals ──────────────────────────────────────────────────────────
+.cache/
+.local/
+.config/
+.agents/
+.cursor/
+.github/instructions/
+attached_assets/
+
+# ── Agent working directories ───────────────────────────────────────────────────
+# Each run clones/works in runs/<run-id>/. This is generated output, never source.
+runs/

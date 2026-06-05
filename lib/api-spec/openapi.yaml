@@ -1,0 +1,794 @@
+openapi: 3.1.0
+info:
+  # Do not change the title, if the title changes, the import paths will be broken
+  title: Api
+  version: 0.1.0
+  description: AG Code Agent API specification
+servers:
+  - url: /api
+    description: Base API path
+tags:
+  - name: health
+    description: Health operations
+  - name: runs
+    description: Agent run management
+  - name: files
+    description: File system operations
+  - name: github
+    description: GitHub integration
+paths:
+  /healthz:
+    get:
+      operationId: healthCheck
+      tags: [health]
+      summary: Health check
+      description: Returns server health status
+      responses:
+        "200":
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+
+  /runs:
+    get:
+      operationId: listRuns
+      tags: [runs]
+      summary: List all agent runs
+      responses:
+        "200":
+          description: List of runs
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Run"
+    post:
+      operationId: createRun
+      tags: [runs]
+      summary: Start a new agent run
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RunInput"
+      responses:
+        "201":
+          description: Run created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Run"
+
+  /runs/{runId}:
+    get:
+      operationId: getRun
+      tags: [runs]
+      summary: Get a run by ID
+      parameters:
+        - name: runId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Run details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RunDetail"
+        "404":
+          description: Run not found
+    delete:
+      operationId: cancelRun
+      tags: [runs]
+      summary: Cancel a running agent run
+      parameters:
+        - name: runId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Run cancelled
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Run"
+
+  /runs/{runId}/events:
+    get:
+      operationId: getRunEvents
+      tags: [runs]
+      summary: Get all events for a run
+      parameters:
+        - name: runId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: List of events
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AgentEvent"
+
+  /runs/{runId}/graph:
+    get:
+      operationId: getRunGraph
+      tags: [runs]
+      summary: Get the graph state for a run
+      parameters:
+        - name: runId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Graph state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GraphState"
+
+  /runs/{runId}/files:
+    get:
+      operationId: listRunFiles
+      tags: [runs]
+      summary: List files in a run's work directory
+      parameters:
+        - name: runId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: File tree
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/FileEntry"
+        "404":
+          description: Run not found
+
+  /runs/{runId}/files/content:
+    get:
+      operationId: getRunFileContent
+      tags: [runs]
+      summary: Get a file's content from a run's work directory
+      parameters:
+        - name: runId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: path
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: File content
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FileContent"
+        "404":
+          description: File not found
+
+  /runs/{runId}/patches/{patchId}:
+    get:
+      operationId: getRunPatch
+      tags: [runs]
+      summary: Get a patch object including its unified diff
+      parameters:
+        - name: runId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: patchId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Patch detail with diff
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PatchDetail"
+        "404":
+          description: Patch not found
+
+  /runs/{runId}/fork:
+    post:
+      operationId: forkRun
+      tags: [runs]
+      summary: Fork a run at a specific event
+      parameters:
+        - name: runId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ForkInput"
+      responses:
+        "201":
+          description: Forked run
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Run"
+
+  /runs/{runId}/diff/{otherId}:
+    get:
+      operationId: diffRuns
+      tags: [runs]
+      summary: Diff two runs
+      parameters:
+        - name: runId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: otherId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Diff result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RunDiff"
+
+  /runs/{runId}/test:
+    get:
+      operationId: getRunTestAvailability
+      tags: [runs]
+      summary: Check whether a run's work directory contains test files
+      parameters:
+        - name: runId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Test availability result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TestAvailability"
+        "404":
+          description: Run not found
+    post:
+      operationId: runTest
+      tags: [runs]
+      summary: Run tests in a completed run's work directory
+      parameters:
+        - name: runId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Test result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TestRunResult"
+        "400":
+          description: No test files found, run has no work directory, or run is not completed
+        "404":
+          description: Run not found
+
+  /runs/{runId}/permissions/{permId}:
+    post:
+      operationId: resolvePermission
+      tags: [runs]
+      summary: Approve or deny a permission request
+      parameters:
+        - name: runId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: permId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PermissionDecision"
+      responses:
+        "200":
+          description: Decision recorded
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentEvent"
+
+  /runs/stats:
+    get:
+      operationId: getRunStats
+      tags: [runs]
+      summary: Get aggregate stats across all runs
+      responses:
+        "200":
+          description: Stats
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RunStats"
+
+  /github/repos:
+    get:
+      operationId: getGithubRepos
+      tags: [github]
+      summary: List or search the authenticated user's GitHub repos
+      parameters:
+        - name: q
+          in: query
+          required: false
+          description: Search query. When absent, returns up to 30 recently updated repos.
+          schema:
+            type: ["string", "null"]
+      responses:
+        "200":
+          description: List of repos
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GithubRepoList"
+        "503":
+          description: GitHub connector unavailable and no token configured
+
+  /files:
+    get:
+      operationId: listFiles
+      tags: [files]
+      summary: List files in the workspace
+      parameters:
+        - name: path
+          in: query
+          required: false
+          schema:
+            type: ["string", "null"]
+      responses:
+        "200":
+          description: File tree
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/FileEntry"
+
+  /files/content:
+    get:
+      operationId: getFileContent
+      tags: [files]
+      summary: Read a file's content
+      parameters:
+        - name: path
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: File content
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FileContent"
+        "404":
+          description: File not found
+
+components:
+  schemas:
+    HealthStatus:
+      type: object
+      properties:
+        status:
+          type: string
+      required:
+        - status
+
+    Run:
+      type: object
+      required: [id, goal, status, createdAt]
+      properties:
+        id:
+          type: string
+        goal:
+          type: string
+        status:
+          type: string
+          enum: [pending, running, completed, failed, cancelled]
+        parentRunId:
+          type: ["string", "null"]
+        forkEventId:
+          type: ["string", "null"]
+        model:
+          type: ["string", "null"]
+        workDir:
+          type: ["string", "null"]
+        repoUrl:
+          type: ["string", "null"]
+        repoBranch:
+          type: ["string", "null"]
+        prUrl:
+          type: ["string", "null"]
+        prStatus:
+          type: ["string", "null"]
+          enum: ["open", "merged", "closed", null]
+        eventCount:
+          type: integer
+        createdAt:
+          type: string
+        completedAt:
+          type: ["string", "null"]
+
+    RunDetail:
+      type: object
+      required: [id, goal, status, createdAt, events, graph]
+      properties:
+        id:
+          type: string
+        goal:
+          type: string
+        status:
+          type: string
+          enum: [pending, running, completed, failed, cancelled]
+        parentRunId:
+          type: ["string", "null"]
+        forkEventId:
+          type: ["string", "null"]
+        model:
+          type: ["string", "null"]
+        workDir:
+          type: ["string", "null"]
+        repoUrl:
+          type: ["string", "null"]
+        repoBranch:
+          type: ["string", "null"]
+        prUrl:
+          type: ["string", "null"]
+        prStatus:
+          type: ["string", "null"]
+          enum: ["open", "merged", "closed", null]
+        eventCount:
+          type: integer
+        createdAt:
+          type: string
+        completedAt:
+          type: ["string", "null"]
+        events:
+          type: array
+          items:
+            $ref: "#/components/schemas/AgentEvent"
+        graph:
+          $ref: "#/components/schemas/GraphState"
+
+    RunInput:
+      type: object
+      required: [goal]
+      properties:
+        goal:
+          type: string
+          minLength: 1
+        model:
+          type: ["string", "null"]
+        workDir:
+          type: ["string", "null"]
+        repoUrl:
+          type: ["string", "null"]
+        repoBranch:
+          type: ["string", "null"]
+        prUrl:
+          type: ["string", "null"]
+
+    ForkInput:
+      type: object
+      required: [atEventId]
+      properties:
+        atEventId:
+          type: string
+        goal:
+          type: ["string", "null"]
+        model:
+          type: ["string", "null"]
+        instruction:
+          type: ["string", "null"]
+        repoUrl:
+          type: ["string", "null"]
+        repoBranch:
+          type: ["string", "null"]
+        prUrl:
+          type: ["string", "null"]
+
+    AgentEvent:
+      type: object
+      required: [id, runId, type, seq, createdAt]
+      properties:
+        id:
+          type: string
+        runId:
+          type: string
+        type:
+          type: string
+        seq:
+          type: integer
+        payload:
+          type: object
+          additionalProperties: true
+        createdAt:
+          type: string
+
+    GraphState:
+      type: object
+      required: [objects, relations]
+      properties:
+        objects:
+          type: array
+          items:
+            $ref: "#/components/schemas/GraphObject"
+        relations:
+          type: array
+          items:
+            $ref: "#/components/schemas/GraphRelation"
+
+    GraphObject:
+      type: object
+      required: [id, type, data]
+      properties:
+        id:
+          type: string
+        type:
+          type: string
+        data:
+          type: object
+          additionalProperties: true
+
+    GraphRelation:
+      type: object
+      required: [id, source, target, type]
+      properties:
+        id:
+          type: string
+        source:
+          type: string
+        target:
+          type: string
+        type:
+          type: string
+
+    RunDiff:
+      type: object
+      required: [runA, runB, summary]
+      properties:
+        runA:
+          type: string
+        runB:
+          type: string
+        summary:
+          $ref: "#/components/schemas/DiffSummary"
+        objectDiffs:
+          type: array
+          items:
+            $ref: "#/components/schemas/ObjectDiff"
+
+    DiffSummary:
+      type: object
+      properties:
+        eventsA:
+          type: integer
+        eventsB:
+          type: integer
+        objectsAddedInB:
+          type: integer
+        objectsRemovedInB:
+          type: integer
+        objectsModifiedInB:
+          type: integer
+        filesChangedA:
+          type: integer
+        filesChangedB:
+          type: integer
+        modelCallsA:
+          type: integer
+        modelCallsB:
+          type: integer
+        toolCallsA:
+          type: integer
+        toolCallsB:
+          type: integer
+
+    ObjectDiff:
+      type: object
+      required: [type, objectId, changeType]
+      properties:
+        type:
+          type: string
+        objectId:
+          type: string
+        changeType:
+          type: string
+          enum: [added, removed, modified]
+        before:
+          type: ["object", "null"]
+          additionalProperties: true
+        after:
+          type: ["object", "null"]
+          additionalProperties: true
+
+    PermissionDecision:
+      type: object
+      required: [decision]
+      properties:
+        decision:
+          type: string
+          enum: [approve, deny]
+        reason:
+          type: ["string", "null"]
+
+    RunStats:
+      type: object
+      required: [totalRuns, completedRuns, failedRuns, activeRuns]
+      properties:
+        totalRuns:
+          type: integer
+        completedRuns:
+          type: integer
+        failedRuns:
+          type: integer
+        activeRuns:
+          type: integer
+        totalEvents:
+          type: integer
+        avgEventsPerRun:
+          type: number
+
+    TestAvailability:
+      type: object
+      required: [hasTests, runId]
+      properties:
+        runId:
+          type: string
+        hasTests:
+          type: boolean
+        testFiles:
+          type: array
+          items:
+            type: string
+
+    TestRunResult:
+      type: object
+      required: [id, runId, type, seq, status, passed, failed, total, output, createdAt]
+      properties:
+        id:
+          type: string
+        runId:
+          type: string
+        type:
+          type: string
+        seq:
+          type: integer
+        status:
+          type: string
+          enum: [passed, failed, skipped]
+        passed:
+          type: integer
+        failed:
+          type: integer
+        total:
+          type: integer
+        output:
+          type: string
+        triggered_by:
+          type: ["string", "null"]
+        createdAt:
+          type: string
+
+    PatchDetail:
+      type: object
+      required: [id, type, path, status, diff, lines_added, lines_removed]
+      properties:
+        id:
+          type: string
+        type:
+          type: string
+        path:
+          type: string
+        status:
+          type: string
+        diff:
+          type: string
+        lines_added:
+          type: integer
+        lines_removed:
+          type: integer
+        content_preview:
+          type: ["string", "null"]
+
+    FileEntry:
+      type: object
+      required: [name, path, type]
+      properties:
+        name:
+          type: string
+        path:
+          type: string
+        type:
+          type: string
+          enum: [file, directory]
+        size:
+          type: ["integer", "null"]
+        children:
+          type: ["array", "null"]
+          items:
+            $ref: "#/components/schemas/FileEntry"
+
+    FileContent:
+      type: object
+      required: [path, content]
+      properties:
+        path:
+          type: string
+        content:
+          type: string
+        language:
+          type: ["string", "null"]
+        size:
+          type: integer
+
+    GithubRepo:
+      type: object
+      required: [fullName, private, htmlUrl]
+      properties:
+        fullName:
+          type: string
+          description: "owner/repo"
+        private:
+          type: boolean
+        htmlUrl:
+          type: string
+
+    GithubRepoList:
+      type: object
+      required: [repos]
+      properties:
+        repos:
+          type: array
+          items:
+            $ref: "#/components/schemas/GithubRepo"
