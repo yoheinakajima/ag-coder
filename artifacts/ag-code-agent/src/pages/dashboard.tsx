@@ -223,7 +223,7 @@ export default function Dashboard() {
       <header className="border-b border-border/50 bg-card/50 backdrop-blur sticky top-0 z-10 p-4 px-6 flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Network className="w-5 h-5 text-primary" />
-          <h1 className="font-mono font-bold tracking-tight">AG Code Agent</h1>
+          <h1 className="font-mono font-bold tracking-tight">AG Coder</h1>
         </div>
       </header>
 

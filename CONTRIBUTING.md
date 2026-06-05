@@ -1,8 +1,20 @@
-# Contributing to AG Code Agent
+# Contributing to AG Coder
 
 Thanks for your interest in contributing! This document covers how to get set up,
 the conventions the codebase follows, and the contract-first workflow you'll need
 when changing the API.
+
+## Preserve the core architecture
+
+AG Coder is a reference implementation for auditable, graph-native agent execution.
+When contributing, please preserve the three things that make it what it is:
+
+- **Contract-first API** — the OpenAPI spec is the source of truth; clients and
+  server validation are generated from it.
+- **Graph / event audit trail** — every meaningful agent action should remain an
+  inspectable object or event, persisted to Postgres.
+- **Demo mode** — the no-key path that still produces a real graph and event
+  stream should keep working.
 
 ## Prerequisites
 
@@ -42,7 +54,9 @@ This is a pnpm workspace monorepo:
 
 ## Contract-first API workflow
 
-The API is defined contract-first. Never hand-edit generated clients. Instead:
+The API is defined contract-first. **Never hand-edit the generated API client
+files** (`lib/api-client-react/src/generated/`, `lib/api-zod/src/generated/`) —
+they are regenerated from the spec and your changes will be overwritten. Instead:
 
 1. Edit the OpenAPI spec in `lib/api-spec/openapi.yaml`.
 2. Regenerate the typed hooks and Zod schemas:

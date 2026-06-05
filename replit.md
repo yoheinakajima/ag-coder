@@ -1,4 +1,6 @@
-# AG Code Agent
+# AG Coder
+
+> Public project name: **AG Coder**. Internal workspace package/artifact identifiers (`@workspace/ag-code-agent`, the `ag-code-agent` artifact dir, the Python agent's git commit author) intentionally remain `ag-code-agent` to avoid risky renames.
 
 A web-based coding agent UI where every action (file reads, writes, bash commands, LLM calls) is a traceable node in a live causal graph. Think developer cockpit: graph-first auditability meets real-time observability.
 

@@ -1,19 +1,86 @@
-# AG Code Agent
+# AG Coder
 
-A web-based coding agent where every action — file reads, writes, bash commands, LLM calls — is a live, traceable node in a causal graph. Think developer cockpit: you give it a goal, watch it think, and see exactly what it did and why.
+**An auditable coding agent built on ActiveGraph.**
 
-The UI is a 4-panel layout: the **causal graph** (left), the **agent conversation** (center), **file changes** (right), and a **live event stream** (bottom).
+AG Coder is a web-based coding agent where every meaningful action — planning, file reads, file writes, bash commands, LLM calls, patches, and test runs — becomes a live, inspectable object in a causal graph.
+
+Most coding agents show you the final diff. Maybe they show you a chat transcript. AG Coder is an experiment in showing the actual runtime structure underneath the agent: what goal created which plan, which task triggered which tool call, which model call produced which patch, and what happened after that patch was tested.
+
+The result is a developer cockpit for watching an agent work. You give it a goal, the agent runs, and the UI fills in with a graph, event stream, conversation, and file changes as the run unfolds.
+
+This repo is not trying to be a production IDE or a Cursor replacement. It is a reference implementation for a different way to build agents: graph-native, event-driven, and auditable by default.
+
+---
+
+## Why this exists
+
+Agent work is usually trapped in the wrong shape.
+
+A transcript is useful, but it is linear. Logs are useful, but they are usually untyped. Diffs are useful, but they only show the final artifact. Real agent execution is not linear. A goal creates a plan. A plan creates tasks. Tasks read context, call models, run tools, produce edits, run tests, and sometimes trigger new tasks.
+
+That is a graph.
+
+AG Coder uses [ActiveGraph](https://activegraph.ai) to make that graph explicit. ActiveGraph is an event-driven graph runtime for building agents around typed objects, relations, events, and behaviors. Instead of treating memory and logs as side effects, the runtime state is the thing the agent operates on.
+
+In this repo, that means every agent run leaves behind a structured audit trail:
+
+- what the agent was asked to do
+- what plan it created
+- which files it inspected
+- what it asked the model
+- which patch was produced
+- which commands ran
+- what succeeded, failed, or was skipped
+- how each step relates causally to the others
+
+If you have ever wished your coding agent could actually show its work, this is a small implementation of what that looks like.
 
 ---
 
 ## What it does
 
 1. You type a goal ("write a prime-number checker with tests").
-2. The agent plans, reads files, writes code, runs tests — all in real time.
-3. Every step appears in the causal graph on the left and the live event stream below.
-4. When it's done you have a full audit trail of every decision the agent made.
+2. The agent plans, reads files, writes code, and runs commands — all in real time.
+3. The UI updates live as the run unfolds, across four panels:
+   - **Causal graph** — the goal → plan → task → tool-call → patch → test-run structure as it forms
+   - **Agent conversation** — the messages exchanged with the model
+   - **File changes** — the patches the agent produced
+   - **Event stream** — a live, timestamped log of every step
+4. When it's done, you have a full audit trail of every decision the agent made.
 
-Without an LLM key, the app runs in **demo mode** — it still populates a real graph and event stream, just with a scripted scenario instead of a live model. This makes it easy to explore the UI before wiring up a model.
+Without an LLM key, the app runs in **demo mode** — it still populates a real graph and event stream, just with a deterministic scripted scenario instead of a live model. This makes it easy to explore the UI before wiring up a model.
+
+---
+
+## What is ActiveGraph?
+
+[ActiveGraph](https://activegraph.ai) is an event-driven graph runtime for building agents.
+
+The basic idea is simple:
+
+- agent state is represented as typed graph objects
+- relationships describe how those objects connect
+- events record what changed
+- behaviors react to events and create the next useful state transition
+- the runtime drives the system forward under a budget
+
+In AG Coder, that means a coding run is not just a loop hidden inside a Python script. It becomes a graph of goals, plans, tasks, model calls, tool calls, patches, test runs, and outcomes.
+
+For example:
+
+```text
+Goal
+  └── Plan
+        └── Task
+              ├── FileRead
+              ├── ModelCall
+              │     └── Patch
+              └── TestRun
+```
+
+This is the core ActiveGraph pattern: make the work visible as structured runtime state, then let behaviors operate over that state.
+
+ActiveGraph is published on PyPI: [`activegraph`](https://pypi.org/project/activegraph/).
 
 ---
 
@@ -22,12 +89,17 @@ Without an LLM key, the app runs in **demo mode** — it still populates a real 
 ### 1. Clone and install
 
 ```bash
-git clone <your-repo-url>
-cd ag-code-agent
+git clone https://github.com/yoheinakajima/ag-coder.git
+cd ag-coder
 pnpm install
 ```
 
-Requires Node.js 24+ and pnpm. The Python agent needs Python 3 with `psycopg2` and `activegraph` available on the path.
+Requirements:
+
+- **Node.js 24+** and **pnpm**
+- **Python 3** (for the agent subprocess)
+- **PostgreSQL**
+- **`activegraph`** and **`psycopg2`** available on the Python path
 
 ### 2. Set up environment variables
 
@@ -39,12 +111,12 @@ cp .env.example .env
 
 | Variable | Required | Description |
 |---|---|---|
-| `DATABASE_URL` | ✅ | Postgres connection string |
-| `OPENAI_API_KEY` | one of these | Enables the OpenAI-powered agent |
-| `ANTHROPIC_API_KEY` | one of these | Enables the Anthropic-powered agent (takes priority if both are set) |
+| `DATABASE_URL` | ✅ **required** | Postgres connection string |
+| `ANTHROPIC_API_KEY` | optional | Enables the Anthropic-powered agent (takes priority if both are set) |
+| `OPENAI_API_KEY` | optional | Enables the OpenAI-powered agent |
 | `SESSION_SECRET` | optional | Express session secret (auto-generated if omitted) |
 
-> If neither LLM key is set, the app runs in demo mode.
+> If neither `ANTHROPIC_API_KEY` nor `OPENAI_API_KEY` is set, the agent runs in deterministic **demo mode**.
 
 ### 3. Push the database schema
 
@@ -66,6 +138,30 @@ Then open the frontend in your browser (Vite prints the URL on startup).
 
 ---
 
+## Architecture
+
+```text
+Browser (React + Vite)
+   │  submit goal
+   ▼
+Express API (POST /api/runs)
+   │  spawn subprocess
+   ▼
+run_agent.py (Python + ActiveGraph)
+   │  write events + graph objects in real time
+   ▼
+PostgreSQL  ◀── API reads + streams via SSE ──▶  Browser
+```
+
+- **Frontend** — React + Vite + Tailwind + shadcn/ui. The 4-panel run-detail view renders the graph, conversation, file patches, and event stream, streaming live updates over SSE (`GET /api/runs/:id/stream`).
+- **API** — Express 5 + TypeScript, contract-first via an OpenAPI spec with Orval generating typed React Query hooks and Zod schemas. It spawns the agent as a detached subprocess and exposes runs, events, graph objects, file trees, and diffs.
+- **Agent** — a Python process using ActiveGraph that writes everything it does directly to Postgres as it goes, so the UI can render the graph as it forms.
+- **Database** — PostgreSQL via Drizzle ORM, with four tables: `runs`, `agent_events`, `graph_objects`, and `graph_relations`.
+
+**The database is the source of truth for each run.** Stdout can still be useful during development, but the durable audit trail is the graph and event stream in Postgres — that keeps the live UI and the audit trail as the same thing.
+
+---
+
 ## Stack
 
 | Layer | Technology |
@@ -81,7 +177,7 @@ Then open the frontend in your browser (Vite prints the URL on startup).
 
 ## Project layout
 
-```
+```text
 artifacts/
   ag-code-agent/     # React frontend (dashboard, run detail, run diff)
   api-server/        # Express API (runs, events, graph, file endpoints, SSE)
@@ -109,22 +205,21 @@ See [CONTRIBUTING.md](./CONTRIBUTING.md) for the contract-first workflow and con
 
 ---
 
-## How the agent works
+## What this is / is not
 
-```
-Goal submitted via UI
-  └─▶ POST /api/runs  →  spawns Python subprocess
-        └─▶ run_agent.py
-              ├─ creates Plan + Task nodes in ActiveGraph
-              ├─ calls OpenAI / Anthropic with tool-calling
-              │     tools: read_file, write_file, edit_file, bash
-              ├─ writes every event + graph object to Postgres in real time
-              └─ emits run.completed
-```
+AG Coder is a reference implementation for auditable agent execution.
 
-Each run gets an isolated working directory under `runs/<run-id>/`. The frontend streams events via SSE (`GET /api/runs/:id/stream`) and renders them as they arrive — no polling needed while a run is live.
+It is designed to show how a coding agent can be built around a live graph of actions, artifacts, and causal relationships. The important part is not that it edits code. The important part is that every meaningful step is represented as inspectable state.
 
-Want the deeper story, including hands-on notes on building the agent with ActiveGraph? See [docs/building-with-activegraph.md](./docs/building-with-activegraph.md).
+This is not intended to be a full production coding environment, IDE replacement, or hardened sandbox. If you use it with real code, treat it as an experimental developer tool. The goal of the repo is to make the architecture legible, hackable, and easy to extend.
+
+---
+
+## Deeper docs
+
+- [Building a coding agent you can actually audit — with ActiveGraph](./docs/building-with-activegraph.md) — the deeper technical walkthrough of how AG Coder is built on ActiveGraph.
+- [Contributing](./CONTRIBUTING.md) — setup, conventions, and the contract-first API workflow.
+- [ActiveGraph](https://activegraph.ai) · [`activegraph` on PyPI](https://pypi.org/project/activegraph/)
 
 ---
 

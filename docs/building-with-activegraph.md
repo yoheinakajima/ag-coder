@@ -5,7 +5,7 @@ and at the end you get a diff (or an apology). What happened in between — whic
 files it read, what it asked the model, why it chose that edit — is gone, buried
 in a scrollback of log lines if it was captured at all.
 
-**AG Code Agent** is an experiment in the opposite direction: an agent where
+**AG Coder** is an experiment in the opposite direction: an agent where
 *every action is a node in a live causal graph*. File reads, writes, bash
 commands, model calls, patches, test runs — each is an object with explicit
 relationships to the things that caused it and the things it produced. The UI is
@@ -13,9 +13,11 @@ a developer cockpit: a causal graph on the left, the conversation in the center,
 file changes on the right, and a live event stream along the bottom. You watch
 the agent think, and when it's done you have a complete audit trail.
 
+This is the deeper technical walkthrough for the [AG Coder](../README.md) repo.
 This post explains what the project is, how it's put together, and — the part I
 found most interesting to build — what it's actually like to write an agent on top
-of [ActiveGraph](https://pypi.org/project/activegraph/).
+of [ActiveGraph](https://activegraph.ai) (published on PyPI as
+[`activegraph`](https://pypi.org/project/activegraph/)).
 
 ---
 
