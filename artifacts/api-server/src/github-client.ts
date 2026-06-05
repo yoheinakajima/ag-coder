@@ -289,8 +289,8 @@ export async function createPullRequest(params: {
 
   const goalSnippet = params.goal.length > 100 ? `${params.goal.slice(0, 97)}…` : params.goal;
   const pr = await githubRequest<{ html_url: string }>("POST", `/repos/${owner}/${repo}/pulls`, {
-    title: `[AG Code Agent] ${goalSnippet}`,
-    body: `Automated pull request opened by AG Code Agent.\n\n**Run ID:** \`${params.runId}\`\n\n**Goal:** ${params.goal}`,
+    title: `[AG Coder] ${goalSnippet}`,
+    body: `Automated pull request opened by AG Coder.\n\n**Run ID:** \`${params.runId}\`\n\n**Goal:** ${params.goal}`,
     head: params.head,
     base,
   });
@@ -307,7 +307,7 @@ export async function createPullRequest(params: {
  * blobs → tree → commit → ref via the REST API, which the proxy authenticates
  * for us. No token needs to be configured.
  *
- * The agent makes exactly one commit (author "AG Code Agent") on top of the
+ * The agent makes exactly one commit (author "AG Coder") on top of the
  * cloned base; we read the files it touched from the work dir and apply them on
  * top of the current base branch tip. Returns { ok } describing the outcome.
  */
@@ -332,7 +332,7 @@ export async function pushBranchViaApi(params: {
   } catch {
     return { ok: false, reason: "no git history in work dir" };
   }
-  if (author !== "AG Code Agent") {
+  if (author !== "AG Coder") {
     return { ok: false, reason: "no agent commit to push" };
   }
 
@@ -420,7 +420,7 @@ export async function pushBranchViaApi(params: {
   const newCommit = await githubRequest<{ sha: string }>(
     "POST",
     `/repos/${owner}/${repo}/git/commits`,
-    { message: `[AG Code Agent] ${params.goal}`, tree: newTree.sha, parents: [baseCommitSha] },
+    { message: `[AG Coder] ${params.goal}`, tree: newTree.sha, parents: [baseCommitSha] },
   );
 
   // Create the branch ref, or fast-forward/replace it if it already exists.
