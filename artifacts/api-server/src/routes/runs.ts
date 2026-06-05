@@ -9,6 +9,8 @@ import { v4 as uuidv4 } from "uuid";
 
 import { db, runsTable, agentEventsTable, graphObjectsTable, graphRelationsTable } from "@workspace/db";
 import { pushBranchViaApi, createPullRequest, getPullRequestStatus, getGitHubAccessToken } from "../github-client.js";
+import { isValidRepoUrl } from "../lib/validate.js";
+import { runCreateRateLimiter } from "../middlewares/rate-limit.js";
 
 import {
   CreateRunBody,
@@ -187,18 +189,22 @@ router.get("/runs", async (req, res) => {
 });
 
 // Create run
-router.post("/runs", async (req, res) => {
+router.post("/runs", runCreateRateLimiter, async (req, res) => {
   const parsed = CreateRunBody.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ error: parsed.error.message });
   }
-  const { goal, model, workDir, repoUrl } = parsed.data;
+  const { goal, model, repoUrl } = parsed.data;
+  if (repoUrl && !isValidRepoUrl(repoUrl)) {
+    return res.status(400).json({ error: "repoUrl must be an https github.com owner/repo URL" });
+  }
   const runId = uuidv4();
 
   // The server runs from artifacts/api-server/ so navigate up to the workspace root
   const workspaceRoot = path.resolve(process.cwd(), "../..");
-  // Auto-assign an isolated work directory per run unless the caller overrides it
-  const resolvedWorkDir = workDir ?? path.join(workspaceRoot, "runs", runId);
+  // Always derive an isolated, server-controlled work directory per run. The
+  // caller never supplies a path, so it can't escape the runs/ root.
+  const resolvedWorkDir = path.join(workspaceRoot, "runs", runId);
   mkdirSync(resolvedWorkDir, { recursive: true });
 
   await db.insert(runsTable).values({
@@ -571,15 +577,18 @@ router.post("/runs/:runId/test", async (req, res) => {
 });
 
 // Fork run
-router.post("/runs/:runId/fork", async (req, res) => {
-  const { runId } = req.params;
+router.post("/runs/:runId/fork", runCreateRateLimiter, async (req, res) => {
+  const { runId } = req.params as { runId: string };
   const parsed = ForkRunBody.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.message });
 
+  const { atEventId, goal, model, instruction, repoUrl: forkRepoUrl } = parsed.data;
+  if (forkRepoUrl && !isValidRepoUrl(forkRepoUrl)) {
+    return res.status(400).json({ error: "repoUrl must be an https github.com owner/repo URL" });
+  }
+
   const parent = await db.select().from(runsTable).where(eq(runsTable.id, runId)).limit(1);
   if (!parent.length) return res.status(404).json({ error: "Parent run not found" });
-
-  const { atEventId, goal, model, instruction, repoUrl: forkRepoUrl } = parsed.data;
   const newRunId = uuidv4();
   const newGoal = goal ?? parent[0]!.goal;
   const newModel = model ?? parent[0]!.model;

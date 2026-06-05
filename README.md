@@ -92,6 +92,7 @@ ActiveGraph is published on PyPI: [`activegraph`](https://pypi.org/project/activ
 git clone https://github.com/yoheinakajima/ag-coder.git
 cd ag-coder
 pnpm install
+pip install -r scripts/agent/requirements.txt
 ```
 
 Requirements:
@@ -99,7 +100,7 @@ Requirements:
 - **Node.js 24+** and **pnpm**
 - **Python 3** (for the agent subprocess)
 - **PostgreSQL**
-- **`activegraph`** and **`psycopg2`** available on the Python path
+- The Python agent's dependencies (`pip install -r scripts/agent/requirements.txt`)
 
 ### 2. Set up environment variables
 
@@ -124,6 +125,14 @@ cp .env.example .env
 pnpm --filter @workspace/db run push
 ```
 
+Optionally run the preflight check to confirm your environment is wired up
+(required env vars, a reachable Postgres, `python3` + agent deps, and which
+agent mode is active):
+
+```bash
+pnpm run check
+```
+
 ### 4. Start the servers
 
 ```bash
@@ -134,7 +143,25 @@ pnpm --filter @workspace/api-server run dev
 pnpm --filter @workspace/ag-code-agent run dev
 ```
 
-Then open the frontend in your browser (Vite prints the URL on startup).
+Then open the frontend in your browser (Vite prints the URL on startup). In local
+dev the frontend proxies `/api` to the API server, so a plain `pnpm dev` works
+without any extra proxy setup.
+
+---
+
+## Configuration & security
+
+Sensible defaults work out of the box; these env vars let you harden a public
+deployment (see [`.env.example`](./.env.example) for the full list):
+
+| Variable | Description |
+|---|---|
+| `CORS_ORIGINS` | Extra allowed CORS origins (comma-separated). localhost and Replit domains are always allowed. |
+| `AGENT_API_KEY` | If set, mutating endpoints require this key (`x-api-key` header or `Authorization: Bearer`). Off by default. |
+| `RUN_RATE_LIMIT_MAX` / `RUN_RATE_LIMIT_WINDOW_MS` | Rate limit for creating/forking runs. Defaults to 10 per 60s. |
+
+The server also derives each run's working directory server-side under `runs/`
+and only accepts `https://github.com/<owner>/<repo>` URLs for cloning.
 
 ---
 
@@ -196,7 +223,10 @@ runs/                # per-run working directories (generated, gitignored)
 
 ```bash
 pnpm run typecheck                               # full typecheck (libs + all packages)
+pnpm run test                                     # run package tests
 pnpm run build                                    # typecheck + build everything
+pnpm run check                                    # preflight env/DB/Python check
+pnpm run format                                   # format with Prettier (format:check to verify)
 pnpm --filter @workspace/api-spec run codegen     # regenerate hooks after editing openapi.yaml
 pnpm --filter @workspace/db run push              # push schema changes to dev DB
 ```

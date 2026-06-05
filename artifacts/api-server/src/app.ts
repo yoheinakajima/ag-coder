@@ -1,10 +1,14 @@
 import express, { type Express } from "express";
-import cors from "cors";
 import pinoHttp from "pino-http";
 import router from "./routes";
 import { logger } from "./lib/logger";
+import { corsMiddleware, requireApiKey } from "./middlewares/security";
 
 const app: Express = express();
+
+// We run behind Replit's reverse proxy (and any self-hosted proxy), so trust the
+// first hop for correct client IPs (rate limiting) and protocol detection.
+app.set("trust proxy", 1);
 
 app.use(
   pinoHttp({
@@ -25,10 +29,12 @@ app.use(
     },
   }),
 );
-app.use(cors());
+app.use(corsMiddleware);
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// Optional API-key gate (no-op unless AGENT_API_KEY is set).
+app.use("/api", requireApiKey);
 app.use("/api", router);
 
 export default app;

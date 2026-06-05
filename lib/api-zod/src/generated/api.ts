@@ -48,7 +48,6 @@ export const ListRunsResponse = zod.array(ListRunsResponseItem)
 export const CreateRunBody = zod.object({
   "goal": zod.string().min(1),
   "model": zod.string().nullish(),
-  "workDir": zod.string().nullish(),
   "repoUrl": zod.string().nullish(),
   "repoBranch": zod.string().nullish(),
   "prUrl": zod.string().nullish()

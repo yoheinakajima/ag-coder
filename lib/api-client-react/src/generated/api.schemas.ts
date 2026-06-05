@@ -146,8 +146,6 @@ export interface RunInput {
   /** @nullable */
   model?: string | null;
   /** @nullable */
-  workDir?: string | null;
-  /** @nullable */
   repoUrl?: string | null;
   /** @nullable */
   repoBranch?: string | null;

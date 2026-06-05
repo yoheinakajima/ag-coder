@@ -26,8 +26,10 @@ When contributing, please preserve the three things that make it what it is:
 
 ```bash
 pnpm install
+pip install -r scripts/agent/requirements.txt   # Python deps for the agent
 cp .env.example .env          # fill in DATABASE_URL and (optionally) an LLM key
 pnpm --filter @workspace/db run push
+pnpm run check                # preflight: env, DB, Python deps, agent mode
 ```
 
 Then run the two services in separate terminals:
@@ -80,11 +82,16 @@ pnpm --filter @workspace/db run push
 
 ## Before opening a pull request
 
-Run the full typecheck and make sure it passes:
+Run the typecheck, tests, and formatting check — these mirror what CI runs:
 
 ```bash
 pnpm run typecheck
+pnpm run test
+pnpm run format:check   # or `pnpm run format` to auto-fix
 ```
+
+CI (`.github/workflows/ci.yml`) runs typecheck, tests, and a build on every push
+and pull request.
 
 Guidelines:
 

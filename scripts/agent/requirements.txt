@@ -1,0 +1,18 @@
+# Python dependencies for the AG Coder agent (scripts/agent/run_agent.py).
+#
+# Install into the Python environment used to run the agent subprocess:
+#   pip install -r scripts/agent/requirements.txt
+#
+# The API server spawns `python3 scripts/agent/run_agent.py`, so these must be
+# importable from that interpreter's path.
+
+# Event-driven graph runtime the agent is built on.
+activegraph==1.0.5.post2
+
+# PostgreSQL driver — the agent writes events/graph objects directly to Postgres.
+psycopg2-binary>=2.9,<3
+
+# LLM SDKs — only needed for live model mode. Without an API key the agent runs
+# in deterministic demo mode and these are unused (but harmless to install).
+anthropic>=0.105,<1
+openai>=2,<3

@@ -509,8 +509,6 @@ components:
           minLength: 1
         model:
           type: ["string", "null"]
-        workDir:
-          type: ["string", "null"]
         repoUrl:
           type: ["string", "null"]
         repoBranch:

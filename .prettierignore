@@ -1,0 +1,10 @@
+node_modules
+dist
+build
+coverage
+pnpm-lock.yaml
+runs
+
+# Generated API client / Zod schemas — do not reformat
+lib/api-client-react/src/generated
+lib/api-zod/src/generated

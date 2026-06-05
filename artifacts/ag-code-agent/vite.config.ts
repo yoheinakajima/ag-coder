@@ -66,6 +66,15 @@ export default defineConfig({
     fs: {
       strict: true,
     },
+    // Local-dev convenience: forward /api to the API server so the app works
+    // with a plain `pnpm dev` outside Replit. On Replit the shared reverse proxy
+    // routes /api before requests reach Vite, so this is inert there.
+    proxy: {
+      "/api": {
+        target: process.env.API_PROXY_TARGET ?? "http://localhost:8080",
+        changeOrigin: true,
+      },
+    },
   },
   preview: {
     port,
