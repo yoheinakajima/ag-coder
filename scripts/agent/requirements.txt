@@ -24,6 +24,11 @@ psycopg[binary]>=3.1,<4
 # framework store's psycopg 3 connection; the two never share a connection.
 psycopg2-binary>=2.9,<3
 
+# Optional: enables ActiveGraph's PrometheusMetrics backend (the runtime feeds
+# it counters/histograms/gauges). Without it the agent falls back to NoOpMetrics
+# and the runtime.status() snapshot (ops.status event) still works. Safe to omit.
+prometheus_client>=0.20
+
 # LLM SDKs — used by ActiveGraph's AnthropicProvider / OpenAIProvider, which
 # drive the @llm_behavior turn loop. The agent no longer calls these SDKs
 # directly. Only needed for live model mode; without an API key the agent runs

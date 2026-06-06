@@ -1098,6 +1098,47 @@ def _materialize_tool_objects(graph, bgraph, task_id) -> None:
 MAX_FIX_ATTEMPTS = 1
 
 
+def _emit_ops_status(graph, runtime, work_dir) -> None:
+    """Surface ActiveGraph's RuntimeStatus snapshot as an ops event and dump the
+    Prometheus exposition for the run.
+
+    The snapshot is framework-native (`runtime.status()` + `status_to_dict`):
+    run state, the budget (with the real cost spent), and the registered
+    behaviors — including the pack's pattern-triggered behavior. If a
+    PrometheusMetrics backend is active, the metric exposition is written to
+    ``<work_dir>/.ag-metrics.prom``.
+    """
+    try:
+        from activegraph.observability import status_to_dict
+        st = status_to_dict(runtime.status(recent=0))
+    except Exception:
+        return
+    behaviors = []
+    for b in st.get("registered_behaviors", []) or []:
+        label = b.get("name", "?")
+        if b.get("pattern"):
+            label += "  [pattern]"
+        if b.get("activate_after") is not None:
+            label += f"  [activate_after={b['activate_after']}]"
+        behaviors.append(label)
+    metrics_written = False
+    try:
+        import prometheus_client
+        text = prometheus_client.generate_latest().decode("utf-8")
+        with open(os.path.join(work_dir, ".ag-metrics.prom"), "w", encoding="utf-8") as f:
+            f.write(text)
+        metrics_written = True
+    except Exception:
+        pass
+    _emit_event(graph, "ops.status", {
+        "state": st.get("state"),
+        "events_processed": st.get("events_processed"),
+        "budget": st.get("budget"),
+        "registered_behaviors": behaviors,
+        "metrics_exposition_written": metrics_written,
+    })
+
+
 def run_with_activegraph(run_id: str, goal: str, work_dir: str, conn,
                          repo_url: str | None = None,
                          fork_from: tuple[str, str] | None = None,
@@ -1413,6 +1454,21 @@ def run_with_activegraph(run_id: str, goal: str, work_dir: str, conn,
         bgraph.emit("task.created", {"task_id": fix_task.id, "title": fix_task.data["title"]})
         bgraph.emit("task.ready", {"task_id": fix_task.id})
 
+    # ── Observability (opt-in framework hooks) ────────────────────────────────
+    # Structured JSON logging to a per-run file (subprocess stdio is suppressed,
+    # so a file is where it's useful), and a Metrics backend the runtime feeds —
+    # PrometheusMetrics when the optional dep is present, else a no-op.
+    ag_log_stream = None
+    metrics = None
+    try:
+        from activegraph.observability import configure_logging, NoOpMetrics, PrometheusMetrics
+        os.makedirs(work_dir, exist_ok=True)
+        ag_log_stream = open(os.path.join(work_dir, ".ag-agent.log"), "a", encoding="utf-8")
+        configure_logging(level="INFO", json_output=True, stream=ag_log_stream)
+        metrics = PrometheusMetrics() if PrometheusMetrics.available() else NoOpMetrics()
+    except Exception:
+        metrics = None
+
     # ── Frame: the run's mission context (goal + constraints + success criteria).
     # Attaching a Frame stamps frame_id provenance on every object/relation/event
     # the runtime creates, so the whole run is tagged with the mission it served.
@@ -1455,7 +1511,7 @@ def run_with_activegraph(run_id: str, goal: str, work_dir: str, conn,
         requires_approval=["patch"] if require_approval else [],
     )
 
-    runtime = Runtime(graph, budget=budget, frame=frame, policy=policy,
+    runtime = Runtime(graph, budget=budget, frame=frame, policy=policy, metrics=metrics,
                       llm_provider=llm_provider, tools=runtime_tools, **replay_caches)
 
     # ── Pack: declare the coding-agent domain as a typed ActiveGraph Pack. ──
@@ -1523,6 +1579,7 @@ def run_with_activegraph(run_id: str, goal: str, work_dir: str, conn,
                 "summary": summary,
                 "paths": paths,
             })
+            _emit_ops_status(graph, runtime, work_dir)
             return "awaiting_approval"
 
         # ── Git: commit changes locally after the task loop ───────────────────
@@ -1532,6 +1589,7 @@ def run_with_activegraph(run_id: str, goal: str, work_dir: str, conn,
         if repo_url and branch_name:
             _git_commit(run_id, goal, branch_name, work_dir, conn, graph)
 
+        _emit_ops_status(graph, runtime, work_dir)
         _emit_event(graph, "run.completed", {"run_id": run_id})
         return "completed"
     finally:
@@ -1539,6 +1597,11 @@ def run_with_activegraph(run_id: str, goal: str, work_dir: str, conn,
         if native_store_conn is not None:
             try:
                 native_store_conn.close()
+            except Exception:
+                pass
+        if ag_log_stream is not None:
+            try:
+                ag_log_stream.close()
             except Exception:
                 pass
 
