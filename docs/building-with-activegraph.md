@@ -45,7 +45,7 @@ Express API (POST /api/runs)
    │  spawn subprocess
    ▼
 run_agent.py (Python + ActiveGraph)
-   │  write events + graph objects in real time
+   │  one listener mirrors the runtime's event stream
    ▼
 PostgreSQL  ◀── API reads + streams via SSE ──▶  Browser (live graph + events)
 ```
@@ -58,8 +58,9 @@ PostgreSQL  ◀── API reads + streams via SSE ──▶  Browser (live graph
   generating typed React Query hooks and Zod schemas. The API spawns the agent as
   a detached subprocess and exposes runs, events, graph objects, file trees, and
   diffs.
-- **Agent** — a Python process using ActiveGraph. It writes everything it does
-  directly to Postgres as it goes, so the UI can render the graph as it forms.
+- **Agent** — a Python process using ActiveGraph, event-driven end to end. A
+  single listener mirrors the runtime's own event stream into Postgres as it
+  goes, so the UI can render the graph as it forms.
 - **Database** — PostgreSQL via Drizzle ORM, with four tables: `runs`,
   `agent_events`, `graph_objects`, and `graph_relations`.
 
@@ -139,9 +140,60 @@ runtime.run_goal(goal)
 ```
 
 The budget is a guardrail against runaway agents — a hard ceiling on events and
-wall-clock time. After the run, you can walk `runtime.store.events()` to capture
-the framework-level trace (LLM requests/responses, tool calls, patch lifecycle)
-and `graph.objects()` to sync anything the runtime created internally.
+wall-clock time. The runtime emits an event for everything it does — LLM
+requests/responses, tool calls, the patch lifecycle, object and relation
+creation. Rather than reconstructing that trace after the run, the project taps
+it *live* with a single listener (next section).
+
+### One listener is the single source of truth
+
+The first instinct is to write to Postgres by hand at each step — every
+`add_object` gets a matching `INSERT`. That works, but it makes the trace a
+*parallel* artifact you have to keep in sync with what the runtime actually did.
+The cleaner model is to treat the runtime's own event stream as the source of
+truth and *project* it into the UI tables.
+
+Since ActiveGraph emits an event for everything, one listener registered on the
+graph — **before** the runtime starts, so it sees every event — is the only
+place that needs to touch the database:
+
+```python
+graph = Graph()
+
+mirror = PostgresMirror(conn, run_id, graph)
+graph.add_listener(mirror)   # fires synchronously inside graph.emit, for every event
+
+runtime = Runtime(graph, budget=budget, llm_provider=llm_provider)
+runtime.run_goal(goal)
+```
+
+Now the behaviors never touch the database. They just create objects and emit
+events; the listener turns `object.created` into a `graph_objects` row (plus an
+`agent_events` row), `relation.created` into a `graph_relations` row, and passes
+domain events (`tool.*`, `llm.*`, `test.run.*`, `task.*`) straight through. The
+UI tables become a faithful projection of the run rather than a second thing to
+maintain.
+
+#### A sharp edge: reserved event types
+
+ActiveGraph's projector *owns* a handful of event names — `object.created`,
+`object.removed`, `relation.created`, `relation.removed`, and
+`patch.proposed` / `patch.applied` / `patch.rejected`. It projects them into
+graph state and expects its own framework payload shape (a real `Patch` /
+`Object`). The UI also has a notion of "a patch was applied to a file," and the
+obvious move — `graph.emit("patch.applied", {"path": ...})` — *crashes the
+projector*, because it tries to read framework fields a domain payload doesn't
+have.
+
+The fix is to stop emitting the reserved names from behaviors entirely and
+**derive** the UI's patch events inside the listener instead. When a `patch`
+*object* is created, the mirror reads its data and synthesizes the UI's
+`patch.applied` / `patch.proposed` event from it. And when the framework emits
+its *own* `patch.applied` for an ordinary field update (e.g. a task's status
+flipping to `in_progress`), the mirror re-projects the object and records it
+under a different name (`object.patched`) so it never lands in the file-patch
+view. The lesson: when a runtime reserves event names, don't fight it — let it
+own them, and translate at the projection boundary.
 
 ### LLM providers (and a demo mode)
 
@@ -171,11 +223,20 @@ every reload, and it gives newcomers something to look at immediately.
 
 A few things that weren't obvious going in:
 
-- **Mirror the graph to your store as you build it, not at the end.** The live UI
-  is only possible because every `add_object` / `add_relation` is written to
-  Postgres immediately. The graph forming on screen is the database filling up in
-  real time. Batching the writes until run completion would have killed the whole
-  "watch it think" experience.
+- **Project the runtime's event stream; don't hand-write a parallel trace.** The
+  live UI is only possible because every event is mirrored to Postgres the moment
+  the runtime emits it — the graph forming on screen is the database filling up in
+  real time. Doing that through one listener, instead of scattering `INSERT`s
+  through the behaviors, keeps the database a faithful projection of what actually
+  happened. (Batching the writes until run completion would also have killed the
+  whole "watch it think" experience.)
+
+- **Respect the runtime's reserved event names.** ActiveGraph projects `object.*`,
+  `relation.*`, and `patch.proposed/applied/rejected` itself and expects its own
+  payload shape; re-emitting those names with a domain payload crashes the
+  projector. Let the framework own them and translate at the projection boundary —
+  derive your UI's patch events from patch *objects*, and surface framework
+  field-patches under a different name.
 
 - **Scope your node IDs.** ActiveGraph hands out local IDs like `plan#1` that are
   only unique within a single run. The moment you persist many runs into one table

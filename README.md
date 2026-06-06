@@ -175,14 +175,14 @@ Express API (POST /api/runs)
    │  spawn subprocess
    ▼
 run_agent.py (Python + ActiveGraph)
-   │  write events + graph objects in real time
+   │  one listener mirrors the runtime's event stream
    ▼
 PostgreSQL  ◀── API reads + streams via SSE ──▶  Browser
 ```
 
 - **Frontend** — React + Vite + Tailwind + shadcn/ui. The 4-panel run-detail view renders the graph, conversation, file patches, and event stream, streaming live updates over SSE (`GET /api/runs/:id/stream`).
 - **API** — Express 5 + TypeScript, contract-first via an OpenAPI spec with Orval generating typed React Query hooks and Zod schemas. It spawns the agent as a detached subprocess and exposes runs, events, graph objects, file trees, and diffs.
-- **Agent** — a Python process using ActiveGraph that writes everything it does directly to Postgres as it goes, so the UI can render the graph as it forms.
+- **Agent** — a Python process using ActiveGraph, event-driven end to end: creating an object wakes a behavior (goal → plan/task → execute → test → bounded fix loop), and a single listener mirrors the runtime's own event stream into Postgres, so the UI can render the graph as it forms.
 - **Database** — PostgreSQL via Drizzle ORM, with four tables: `runs`, `agent_events`, `graph_objects`, and `graph_relations`.
 
 **The database is the source of truth for each run.** Stdout can still be useful during development, but the durable audit trail is the graph and event stream in Postgres — that keeps the live UI and the audit trail as the same thing.
