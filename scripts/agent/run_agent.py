@@ -83,7 +83,7 @@ def _insert_event(conn, run_id: str, event_type: str, seq: int, payload: dict) -
 
 def update_run_status(conn, run_id: str, status: str):
     with conn.cursor() as cur:
-        if status in ("completed", "failed", "cancelled"):
+        if status in ("completed", "failed", "cancelled", "rejected"):
             cur.execute(
                 "UPDATE runs SET status = %s, completed_at = NOW() WHERE id = %s",
                 (status, run_id),
@@ -102,18 +102,268 @@ def update_run_repo_branch(conn, run_id: str, branch: str):
     conn.commit()
 
 
-# ── The single trace mirror ─────────────────────────────────────────────────────
+# ── The native ActiveGraph event store (authoritative log) ──────────────────────
+# Tier-1 of the "make this a true ActiveGraph showcase" work: rather than treating
+# the hand-written PostgresMirror as the source of truth, we attach ActiveGraph's
+# OWN PostgresEventStore to the graph. The runtime then persists every event it
+# emits to that store automatically (Graph.emit -> store.append), giving us the
+# framework's durable, schema-versioned, forkable, replayable event log for free.
+#
+# The store keeps its tables (events / runs / meta) in a dedicated Postgres schema
+# so they never collide with the application's public.* tables — in particular the
+# app already owns a `runs` table with a different shape. Everything still lives in
+# one database (one DATABASE_URL); only the schema namespace differs.
+
+NATIVE_STORE_SCHEMA = "activegraph"
+
+
+def _open_native_store(run_id: str):
+    """Open ActiveGraph's native PostgresEventStore in an isolated schema.
+
+    Returns ``(store, conn)`` on success or ``(None, None)`` if the optional
+    psycopg 3 / store dependency is missing or the connection fails. The native
+    log is *additive* — a faithful, framework-owned copy of the run — so failing
+    to open it must never break a run; the UI projection (PostgresMirror) still
+    works on its own.
+    """
+    if not DATABASE_URL:
+        return None, None
+    try:
+        import psycopg  # psycopg 3.x, required by PostgresEventStore
+        from activegraph.store.postgres import PostgresEventStore
+    except Exception:
+        return None, None
+
+    sconn = None
+    try:
+        # autocommit=True mirrors how PostgresEventStore manages a URL-owned
+        # connection: each append() commits on its own.
+        sconn = psycopg.connect(DATABASE_URL, autocommit=True)
+        with sconn.cursor() as cur:
+            cur.execute(f'CREATE SCHEMA IF NOT EXISTS "{NATIVE_STORE_SCHEMA}"')
+            # Pin the session to the store's schema so the store's
+            # CREATE TABLE IF NOT EXISTS events/runs/meta land there and never
+            # resolve to the app's public.runs.
+            cur.execute(f'SET search_path TO "{NATIVE_STORE_SCHEMA}"')
+        store = PostgresEventStore(sconn, run_id)  # runs _ensure_schema()
+        return store, sconn
+    except Exception:
+        if sconn is not None:
+            try:
+                sconn.close()
+            except Exception:
+                pass
+        return None, None
+
+
+def _open_native_store_conn():
+    """Open a psycopg 3 connection scoped to the native store's schema, or None."""
+    if not DATABASE_URL:
+        return None
+    try:
+        import psycopg
+    except Exception:
+        return None
+    try:
+        conn = psycopg.connect(DATABASE_URL, autocommit=True)
+        with conn.cursor() as cur:
+            cur.execute(f'CREATE SCHEMA IF NOT EXISTS "{NATIVE_STORE_SCHEMA}"')
+            cur.execute(f'SET search_path TO "{NATIVE_STORE_SCHEMA}"')
+        return conn
+    except Exception:
+        return None
+
+
+def _read_native_events(run_id: str) -> list:
+    """Read a run's full native event log (for pre-populating replay caches)."""
+    conn = _open_native_store_conn()
+    if conn is None:
+        return []
+    try:
+        from activegraph.store.postgres import PostgresEventStore
+        store = PostgresEventStore(conn, run_id)
+        return list(store.iter_events())
+    except Exception:
+        return []
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def _resolve_native_event_id(app_conn, parent_run_id: str, ui_event_id: str) -> Optional[str]:
+    """Map a UI event id (agent_events.id) to the framework's native event id.
+
+    The mirror stamps ``_src_event_id`` (the native event id) into every
+    projected event's payload; this reads it back so a fork can target the
+    framework's authoritative log. If the value already looks like a native id
+    (``evt_*``), it is used as-is.
+    """
+    if ui_event_id and ui_event_id.startswith("evt_"):
+        return ui_event_id
+    with app_conn.cursor() as cur:
+        cur.execute(
+            "SELECT payload->>'_src_event_id' FROM agent_events WHERE run_id = %s AND id = %s",
+            (parent_run_id, ui_event_id),
+        )
+        row = cur.fetchone()
+    return row[0] if row and row[0] else None
+
+
+def _fork_native_log(new_run_id: str, parent_run_id: str, at_native_event_id: str,
+                     label: Optional[str] = None):
+    """Branch a run by copying the parent's native event log up to and including
+    ``at_native_event_id`` into ``new_run_id`` — ActiveGraph's real fork
+    primitive (``PostgresEventStore.fork_run``), the Postgres analogue of the
+    SQLite-only ``Runtime.fork``.
+
+    Returns ``(store, conn, copied_count)``; raises on failure (a fork that
+    can't branch the lineage should fail loudly, unlike the additive store).
+    """
+    import psycopg  # noqa: F401 — ensure the dep is present before we promise a fork
+    from activegraph.store.postgres import PostgresEventStore
+
+    conn = _open_native_store_conn()
+    if conn is None:
+        raise RuntimeError("native PostgresEventStore unavailable — cannot fork")
+    copied = PostgresEventStore.fork_run(
+        conn,
+        parent_run_id=parent_run_id,
+        new_run_id=new_run_id,
+        at_event_id=at_native_event_id,
+        label=label,
+        created_at=now_iso(),
+    )
+    store = PostgresEventStore(conn, new_run_id)
+    return store, conn, copied
+
+
+def _causal_chain_json(run_id: str, object_id: str) -> dict:
+    """Compute ActiveGraph's native causal_chain for an object in a stored run.
+
+    Replays the run's authoritative event log into a fresh Graph and calls the
+    framework's ``causal_chain`` — the same provenance walk the runtime records,
+    not the app's hand-built relations. Accepts a scoped (``<run8>:patch#3``) or
+    local (``patch#3``) object id. Returns ``{run_id, object_id, chain}``.
+    """
+    conn = _open_native_store_conn()
+    if conn is None:
+        return {"error": "native event store unavailable", "run_id": run_id, "object_id": object_id}
+    try:
+        from activegraph import Graph
+        from activegraph.store.postgres import PostgresEventStore
+        from activegraph.trace.causal import causal_chain
+
+        store = PostgresEventStore(conn, run_id)
+        graph = Graph(run_id=run_id)
+        n = 0
+        for ev in store.iter_events():
+            graph._replay_event(ev)  # noqa: SLF001 — framework replay seam
+            n += 1
+        if n == 0:
+            return {"error": "no native event log for this run", "run_id": run_id, "object_id": object_id}
+        local_id = object_id.split(":", 1)[1] if ":" in object_id else object_id
+        return {"run_id": run_id, "object_id": local_id, "chain": causal_chain(graph, local_id)}
+    except Exception as exc:  # pragma: no cover - defensive
+        return {"error": str(exc), "run_id": run_id, "object_id": object_id}
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def _insert_approval(conn, approval_id: str, run_id: str, kind: str, summary: str, data: dict) -> None:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO agent_approvals (id, run_id, kind, status, summary, data, created_at)
+            VALUES (%s, %s, %s, 'pending', %s, %s, NOW())
+            ON CONFLICT (id) DO NOTHING
+            """,
+            (approval_id, run_id, kind, summary, json.dumps(data, default=str)),
+        )
+    conn.commit()
+
+
+def _pending_approvals(conn, run_id: str) -> list[dict]:
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT id, kind, summary FROM agent_approvals WHERE run_id = %s AND status = 'pending' ORDER BY created_at",
+            (run_id,),
+        )
+        rows = cur.fetchall()
+    return [{"id": r[0], "kind": r[1], "summary": r[2]} for r in rows]
+
+
+def _resolve_approval(conn, approval_id: str, status: str, resolved_by: str) -> None:
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE agent_approvals SET status = %s, resolved_at = NOW(), resolved_by = %s WHERE id = %s",
+            (status, resolved_by, approval_id),
+        )
+    conn.commit()
+
+
+def _attach_for_continuation(run_id: str, conn):
+    """Open a run's native store, replay its log into a graph, project the existing
+    prefix into the UI tables through one mirror, and return everything wired so
+    NEW events append to both the native log and the UI projection.
+
+    Returns ``(graph, native_store_conn)``. Raises if the native store is missing.
+    """
+    from activegraph import Graph
+    from activegraph.core.ids import IDGen
+    from activegraph.store.postgres import PostgresEventStore
+
+    sconn = _open_native_store_conn()
+    if sconn is None:
+        raise RuntimeError("native event store unavailable — cannot continue run")
+    store = PostgresEventStore(sconn, run_id)
+    events = list(store.iter_events())
+    graph = Graph(ids=IDGen(), run_id=run_id)
+    for ev in events:
+        graph._replay_event(ev)  # noqa: SLF001 — framework replay seam
+    graph.ids.reseed_from_events(events)
+    graph.attach_store(store)
+    mirror = PostgresMirror(conn, run_id, graph)
+    _clear_ui_rows(conn, run_id)
+    for ev in events:
+        mirror.project(ev)
+    graph.add_listener(mirror)
+    return graph, sconn
+
+
+def _clear_ui_rows(app_conn, run_id: str) -> None:
+    with app_conn.cursor() as cur:
+        cur.execute("DELETE FROM agent_events WHERE run_id = %s", (run_id,))
+        cur.execute("DELETE FROM graph_objects WHERE run_id = %s", (run_id,))
+        cur.execute("DELETE FROM graph_relations WHERE run_id = %s", (run_id,))
+    app_conn.commit()
+
+
+# ── The UI projection mirror ────────────────────────────────────────────────────
 
 
 class PostgresMirror:
-    """The one bridge between the ActiveGraph runtime and the UI's Postgres tables.
+    """Projects the runtime's event stream into the UI's read-model tables.
 
-    Subscribed via ``graph.add_listener``, this fires synchronously inside
+    The AUTHORITATIVE log is ActiveGraph's own ``PostgresEventStore`` (attached
+    to the graph via ``_open_native_store``); the runtime persists every event
+    there automatically. This mirror is a *downstream projection* of that same
+    stream into the denormalized tables the UI reads — ``agent_events`` /
+    ``graph_objects`` / ``graph_relations`` — not a parallel, hand-maintained
+    source of truth. Because the projection is a pure function of the event
+    stream, the UI tables can be dropped and rebuilt from the native store at
+    any time (see ``rebuild_ui_projection``), which is what makes replay and
+    fork tractable.
+
+    Subscribed via ``graph.add_listener``, ``project`` fires synchronously inside
     ``graph.emit`` for EVERY event the runtime produces, AFTER the event has been
-    appended to the log and projected into graph state. It is the single writer
-    of ``agent_events`` / ``graph_objects`` / ``graph_relations`` for the run, so
-    those tables are a faithful projection of the runtime's own event stream
-    rather than a separate hand-maintained trace.
+    appended to the native log and applied to graph state. The same ``project``
+    method is reused by ``rebuild_ui_projection`` to re-derive the tables from
+    the stored log.
 
     Event handling:
       * ``object.created``  -> upsert graph_objects (scoped id) + emit an
@@ -145,19 +395,25 @@ class PostgresMirror:
             "relation.removed",
         }
     )
-    _SUPPRESSED_PREFIXES = ("pattern.", "runtime.", "approval.")
+    # approval.* are surfaced (the human-in-the-loop flow needs them in the UI).
+    _SUPPRESSED_PREFIXES = ("pattern.", "runtime.")
 
     def __init__(self, conn, run_id: str, graph) -> None:
         self._conn = conn
         self._run_id = run_id
         self._graph = graph
         self._seq = 0
+        # The native event id currently being projected. Stamped into every
+        # agent_events row so a UI-selected event can be mapped back to the
+        # framework's authoritative event log (enables native fork — see
+        # _resolve_native_event_id).
+        self._src_event_id: Optional[str] = None
 
     # The listener entry point. Must never raise into graph.emit / the runtime
     # loop, so failures are caught and surfaced as a mirror.error event.
     def __call__(self, event) -> None:
         try:
-            self._handle(event)
+            self.project(event)
         except Exception as exc:  # pragma: no cover - defensive
             try:
                 self._record(
@@ -172,6 +428,11 @@ class PostgresMirror:
     def _record(self, event_type: str, payload: dict) -> str:
         self._seq += 1
         event_id = str(uuid.uuid4())
+        # Carry the source native event id so the UI/API can fork at this point
+        # by mapping back to the framework's event log. Non-destructive: the UI
+        # ignores unknown payload keys.
+        if self._src_event_id is not None and "_src_event_id" not in payload:
+            payload = {**payload, "_src_event_id": self._src_event_id}
         with self._conn.cursor() as cur:
             cur.execute(
                 """
@@ -210,7 +471,15 @@ class PostgresMirror:
 
     # ---- dispatch ----
 
-    def _handle(self, event) -> None:
+    def project(self, event) -> None:
+        """Project a single runtime event into the UI read-model tables.
+
+        Pure function of the event (plus current graph state, for framework
+        field-patches) — the live listener and the ``rebuild_ui_projection``
+        replay path both call this, so the projection is identical whether it
+        runs live or is reconstructed from the native store.
+        """
+        self._src_event_id = getattr(event, "id", None)
         etype = event.type
         payload = event.payload or {}
 
@@ -265,6 +534,17 @@ class PostgresMirror:
         # Domain + behavior.failed events pass straight through to the stream.
         self._record(etype, payload)
 
+        # When the runtime owns the LLM turn loop (@llm_behavior), the assistant's
+        # prose lives in llm.responded.raw_text, not in a domain
+        # assistant.message.added. Derive the conversation message from it so the
+        # UI's conversation panel stays populated without the behavior emitting
+        # one by hand. (Demo mode emits assistant.message.added directly and has
+        # no raw_text on its llm.responded, so this never double-counts.)
+        if etype == "llm.responded":
+            text = (payload.get("raw_text") or "").strip()
+            if text:
+                self._record("assistant.message.added", {"role": "assistant", "content": text})
+
     def _derive_patch_event(self, local_id: str, data: dict) -> None:
         """Synthesize the UI's file-patch event from a patch object's data.
 
@@ -288,6 +568,40 @@ class PostgresMirror:
 
     def _scoped_id(self, local_id: str) -> str:
         return _scoped(self._run_id, local_id)
+
+
+def rebuild_ui_projection(app_conn, store, run_id: str) -> int:
+    """Re-derive a run's UI tables purely from ActiveGraph's native event store.
+
+    This is the concrete payoff of attaching the native store: the UI tables are
+    a projection, so we can throw them away and reconstruct them byte-for-byte
+    from the framework's authoritative log. Same mechanism a true fork/replay
+    would use (``Runtime.load`` / ``Runtime.fork`` replay the log; this replays
+    it through the UI projection).
+
+    Replays the stored events into a fresh ``Graph`` (so the framework
+    field-patch branch can read post-patch object state) and feeds each event
+    through ``PostgresMirror.project``. Returns the number of events replayed.
+    """
+    from activegraph import Graph
+
+    # Fresh graph carries object/relation state as we walk the log; it is NOT
+    # persisted (we never attach a store to it) and fires no behaviors.
+    graph = Graph()
+
+    with app_conn.cursor() as cur:
+        cur.execute("DELETE FROM agent_events WHERE run_id = %s", (run_id,))
+        cur.execute("DELETE FROM graph_objects WHERE run_id = %s", (run_id,))
+        cur.execute("DELETE FROM graph_relations WHERE run_id = %s", (run_id,))
+    app_conn.commit()
+
+    mirror = PostgresMirror(app_conn, run_id, graph)
+    n = 0
+    for ev in store.iter_events():
+        graph._replay_event(ev)  # noqa: SLF001 — framework's blessed replay seam
+        mirror.project(ev)
+        n += 1
+    return n
 
 
 def _emit_event(graph, event_type: str, payload: dict, actor: str = "system"):
@@ -547,6 +861,235 @@ def _git_commit(run_id: str, goal: str, branch_name: str, work_dir: str, conn, g
     return True
 
 
+# ── Native ActiveGraph tools (@tool) ────────────────────────────────────────────
+# In LLM mode the agent does NOT hand-roll the provider SDK loop. It registers
+# these as first-class ActiveGraph Tools and lets the runtime own the turn loop:
+# prompt assembly, llm.requested/responded, tool.requested/responded, schema
+# validation, caching and replay all flow through the framework. The tool bodies
+# are pure (path in, structured result out) so they're cacheable/replayable; the
+# graph objects (patch / file_snapshot / command_result) are created afterwards
+# by the @llm_behavior handler from the recorded tool events.
+
+from pydantic import BaseModel  # noqa: E402 — hard dep via activegraph
+
+
+class _ReadFileIn(BaseModel):
+    path: str
+    start_line: Optional[int] = None
+    end_line: Optional[int] = None
+
+
+class _ReadFileOut(BaseModel):
+    ok: bool
+    content: str = ""
+    error: Optional[str] = None
+
+
+class _WriteFileIn(BaseModel):
+    path: str
+    content: str
+
+
+class _PatchOut(BaseModel):
+    ok: bool
+    path: str
+    diff: str = ""
+    lines_added: int = 0
+    lines_removed: int = 0
+    error: Optional[str] = None
+
+
+class _EditFileIn(BaseModel):
+    path: str
+    search: str
+    replace: str
+
+
+class _BashIn(BaseModel):
+    command: str
+    timeout: int = 30
+
+
+class _BashOut(BaseModel):
+    ok: bool
+    output: str = ""
+    error: Optional[str] = None
+
+
+def _diff_stats(before: str, after: str, path: str) -> tuple[str, int, int]:
+    diff_lines = list(difflib.unified_diff(
+        before.splitlines(keepends=True),
+        after.splitlines(keepends=True),
+        fromfile=f"a/{path}", tofile=f"b/{path}", lineterm="",
+    ))
+    text = "\n".join(diff_lines)
+    added = sum(1 for l in diff_lines if l.startswith("+") and not l.startswith("+++"))
+    removed = sum(1 for l in diff_lines if l.startswith("-") and not l.startswith("---"))
+    return text, added, removed
+
+
+def _anthropic_provider():
+    """ActiveGraph's AnthropicProvider with a corrected ``count_tokens``.
+
+    The shipped ``count_tokens`` serializes messages with ``m.to_dict()``, which
+    leaves tool-result messages as ``role="tool"`` — a role the Anthropic API
+    rejects (``complete()`` correctly maps them via ``_message_to_anthropic``).
+    That path only fires when a cost budget (``max_cost_usd``) is set, so without
+    this fix enabling cost gating breaks every multi-turn tool run. We override
+    ``count_tokens`` to use the same message conversion ``complete()`` does.
+    """
+    from activegraph.llm import AnthropicProvider
+    from activegraph.llm.anthropic import _message_to_anthropic
+
+    class _CostAwareAnthropicProvider(AnthropicProvider):
+        def count_tokens(self, *, system, messages, model):  # type: ignore[override]
+            client = self._client()
+            kwargs = {"model": model, "messages": [_message_to_anthropic(m) for m in messages]}
+            if system:
+                kwargs["system"] = system
+            result = client.messages.count_tokens(**kwargs)
+            return int(getattr(result, "input_tokens", 0) or 0)
+
+    return _CostAwareAnthropicProvider()
+
+
+def _build_tools(work_dir: str) -> list:
+    """Build the ActiveGraph Tool objects bound to this run's work dir.
+
+    Tools never raise on expected failures (missing file, blocked command):
+    they return ``ok=False`` so the model can see the error and react, rather
+    than failing the whole behavior.
+    """
+    from activegraph import tool
+
+    @tool(name="read_file", description="Read the contents of a file.",
+          input_schema=_ReadFileIn, output_schema=_ReadFileOut)
+    def read_file(args: _ReadFileIn, ctx) -> _ReadFileOut:
+        r = tool_read(args.path, args.start_line, args.end_line, work_dir)
+        return _ReadFileOut(ok=r.ok, content=r.output if r.ok else "", error=r.error)
+
+    @tool(name="write_file", description="Write content to a file, creating it if needed.",
+          input_schema=_WriteFileIn, output_schema=_PatchOut)
+    def write_file(args: _WriteFileIn, ctx) -> _PatchOut:
+        full = Path(work_dir) / args.path
+        before = full.read_text(encoding="utf-8", errors="replace") if full.is_file() else ""
+        r = tool_write(args.path, args.content, work_dir)
+        if not r.ok:
+            return _PatchOut(ok=False, path=args.path, error=r.error)
+        diff, added, removed = _diff_stats(before, args.content, args.path)
+        return _PatchOut(ok=True, path=args.path, diff=diff, lines_added=added, lines_removed=removed)
+
+    @tool(name="edit_file", description="Edit a file by replacing the first occurrence of a string.",
+          input_schema=_EditFileIn, output_schema=_PatchOut)
+    def edit_file(args: _EditFileIn, ctx) -> _PatchOut:
+        full = Path(work_dir) / args.path
+        before = full.read_text(encoding="utf-8", errors="replace") if full.is_file() else ""
+        r = tool_edit(args.path, args.search, args.replace, work_dir)
+        if not r.ok:
+            return _PatchOut(ok=False, path=args.path, error=r.error)
+        after = full.read_text(encoding="utf-8", errors="replace") if full.is_file() else before
+        diff, added, removed = _diff_stats(before, after, args.path)
+        return _PatchOut(ok=True, path=args.path, diff=diff, lines_added=added, lines_removed=removed)
+
+    @tool(name="bash", description="Execute a shell command. Dangerous commands are blocked.",
+          input_schema=_BashIn, output_schema=_BashOut)
+    def bash(args: _BashIn, ctx) -> _BashOut:
+        danger = is_dangerous(args.command)
+        if danger:
+            return _BashOut(ok=False, error=f"Blocked dangerous command: {danger}")
+        r = tool_bash(args.command, work_dir, args.timeout)
+        return _BashOut(ok=r.ok, output=r.output, error=r.error)
+
+    return [read_file, write_file, edit_file, bash]
+
+
+def _materialize_tool_objects(graph, bgraph, task_id) -> None:
+    """Turn the tool/LLM events the runtime recorded during an @llm_behavior
+    turn loop into the graph objects the UI renders.
+
+    The runtime stamps this invocation's ``tool.requested`` event ids onto
+    ``bgraph``; we pair each with its ``tool.responded`` and create the matching
+    domain object (patch / file_snapshot / command_result), plus one model_call
+    summarizing the LLM round-trips. BehaviorGraph auto-stamps provenance, so
+    each object links back to the tool/LLM events for causal-chain walks.
+    """
+    tr_ids = list(getattr(bgraph, "_tool_request_event_ids", []) or [])
+    by_id = {e.id: e for e in graph.events}
+    resp_by_req = {
+        e.caused_by: e
+        for e in graph.events
+        if e.type == "tool.responded" and e.caused_by in tr_ids
+    }
+
+    for tr_id in tr_ids:
+        req = by_id.get(tr_id)
+        if req is None:
+            continue
+        tool_name = req.payload.get("tool")
+        args = req.payload.get("args") or {}
+        resp = resp_by_req.get(tr_id)
+        out = (resp.payload.get("output") if resp else None) or {}
+        ok = bool(out.get("ok", True))
+
+        # Surface policy enforcement: a blocked write/command is a policy denial,
+        # not an ordinary tool error. Record it explicitly for the audit trail.
+        err = out.get("error") or ""
+        if not ok and ("Protected path" in err or "Blocked dangerous" in err):
+            bgraph.emit("policy.denied", {
+                "tool": tool_name,
+                "reason": err,
+                "target": args.get("path") or args.get("command"),
+                "task_id": task_id,
+            })
+
+        if tool_name in ("write_file", "edit_file") and ok:
+            patch = bgraph.add_object("patch", {
+                "path": out.get("path") or args.get("path"),
+                "type": "write" if tool_name == "write_file" else "edit",
+                "status": "applied",
+                "task_id": task_id,
+                "diff": out.get("diff", ""),
+                "lines_added": out.get("lines_added", 0),
+                "lines_removed": out.get("lines_removed", 0),
+            })
+            bgraph.add_relation(task_id, patch.id, "TASK_HAS_PATCH")
+        elif tool_name == "read_file" and ok:
+            snap = bgraph.add_object("file_snapshot", {
+                "path": args.get("path"),
+                "content_preview": (out.get("content") or "")[:200],
+                "task_id": task_id,
+            })
+            bgraph.add_relation(task_id, snap.id, "TASK_HAS_FILE_SNAPSHOT")
+        elif tool_name == "bash":
+            cmd = bgraph.add_object("command_result", {
+                "command": args.get("command"),
+                "ok": ok,
+                "output_preview": (out.get("output") or "")[:300],
+                "task_id": task_id,
+            })
+            bgraph.add_relation(task_id, cmd.id, "TASK_HAS_COMMAND_RESULT")
+
+    # Summarize the LLM round-trips as a model_call node (UI continuity).
+    model = None
+    in_tok = out_tok = turns = 0
+    for e in graph.events:
+        if e.type == "llm.responded" and e.payload.get("behavior") == "task_executor":
+            turns += 1
+            model = e.payload.get("model", model)
+            in_tok += int(e.payload.get("input_tokens", 0) or 0)
+            out_tok += int(e.payload.get("output_tokens", 0) or 0)
+    if turns:
+        mc = bgraph.add_object("model_call", {
+            "model": model or "?",
+            "status": "completed",
+            "task_id": task_id,
+            "input_tokens": in_tok,
+            "output_tokens": out_tok,
+            "turns": turns,
+        })
+        bgraph.add_relation(task_id, mc.id, "TASK_HAS_MODEL_CALL")
+
+
 # ── Event-driven ActiveGraph agent ──────────────────────────────────────────────
 
 # How many automatic fix passes to attempt when tests fail. Bounds the
@@ -555,19 +1098,151 @@ def _git_commit(run_id: str, goal: str, branch_name: str, work_dir: str, conn, g
 MAX_FIX_ATTEMPTS = 1
 
 
-def run_with_activegraph(run_id: str, goal: str, work_dir: str, conn, repo_url: str | None = None):
-    """Run the coding agent using the ActiveGraph runtime, event-driven end to end."""
+def _emit_ops_status(graph, runtime, work_dir) -> None:
+    """Surface ActiveGraph's RuntimeStatus snapshot as an ops event and dump the
+    Prometheus exposition for the run.
+
+    The snapshot is framework-native (`runtime.status()` + `status_to_dict`):
+    run state, the budget (with the real cost spent), and the registered
+    behaviors — including the pack's pattern-triggered behavior. If a
+    PrometheusMetrics backend is active, the metric exposition is written to
+    ``<work_dir>/.ag-metrics.prom``.
+    """
+    try:
+        from activegraph.observability import status_to_dict
+        st = status_to_dict(runtime.status(recent=0))
+    except Exception:
+        return
+    behaviors = []
+    for b in st.get("registered_behaviors", []) or []:
+        label = b.get("name", "?")
+        if b.get("pattern"):
+            label += "  [pattern]"
+        if b.get("activate_after") is not None:
+            label += f"  [activate_after={b['activate_after']}]"
+        behaviors.append(label)
+    metrics_written = False
+    try:
+        import prometheus_client
+        text = prometheus_client.generate_latest().decode("utf-8")
+        with open(os.path.join(work_dir, ".ag-metrics.prom"), "w", encoding="utf-8") as f:
+            f.write(text)
+        metrics_written = True
+    except Exception:
+        pass
+    _emit_event(graph, "ops.status", {
+        "state": st.get("state"),
+        "events_processed": st.get("events_processed"),
+        "budget": st.get("budget"),
+        "registered_behaviors": behaviors,
+        "metrics_exposition_written": metrics_written,
+    })
+
+
+def run_with_activegraph(run_id: str, goal: str, work_dir: str, conn,
+                         repo_url: str | None = None,
+                         fork_from: tuple[str, str] | None = None,
+                         require_approval: bool = False) -> str:
+    """Run the coding agent using the ActiveGraph runtime, event-driven end to end.
+
+    Returns the run's terminal status: ``"completed"`` or, when
+    ``require_approval`` is set and the run produced changes, ``"awaiting_approval"``
+    (the run pauses for a human to approve/reject before changes are committed; see
+    ``finalize_run``).
+
+    When ``fork_from=(parent_run_id, ui_event_id)`` is given, the run is a real
+    ActiveGraph fork: the parent's native event log up to that event is copied
+    into this run (shared lineage), replayed into the graph, and projected into
+    the UI tables — then the agent continues forward on top of that inherited
+    history, with the parent's LLM/tool responses pre-loaded into replay caches.
+    """
     try:
         from activegraph import Graph, Runtime, behavior
+        from activegraph.core.ids import IDGen
     except ImportError as e:
         raise RuntimeError(f"activegraph not installed: {e}")
 
-    graph = Graph()
+    native_store = None
+    native_store_conn = None
+    replay_caches: dict[str, Any] = {}
+    fork_lineage: tuple[str, str] | None = None
 
-    # The single bridge: one listener mirrors the runtime's event stream into the
-    # UI tables. Registered before the runtime so it observes every event.
-    mirror = PostgresMirror(conn, run_id, graph)
-    graph.add_listener(mirror)
+    # A real lineage fork requires the parent's native event log. If anything in
+    # the branch fails (parent predates the native store, event not found, store
+    # unavailable), degrade to a fresh continuation and note why — never fail the
+    # run over an un-forkable parent.
+    fork_degraded: tuple[str, str, str] | None = None
+    graph = None
+    if fork_from is not None:
+        parent_run_id, ui_event_id = fork_from
+        try:
+            at_native = _resolve_native_event_id(conn, parent_run_id, ui_event_id)
+            if at_native is None:
+                raise RuntimeError("parent has no native lineage for this event")
+            native_store, native_store_conn, copied = _fork_native_log(run_id, parent_run_id, at_native)
+            fork_lineage = (parent_run_id, at_native)
+            copied_events = list(native_store.iter_events())
+
+            # Rebuild graph state from the copied prefix and continue from there.
+            graph = Graph(ids=IDGen(), run_id=run_id)
+            for ev in copied_events:
+                graph._replay_event(ev)  # noqa: SLF001 — framework replay seam
+            graph.ids.reseed_from_events(copied_events)
+            graph.attach_store(native_store)
+
+            # Project the inherited prefix into the UI tables through ONE mirror
+            # so the seq counter stays monotonic when live events follow.
+            mirror = PostgresMirror(conn, run_id, graph)
+            _clear_ui_rows(conn, run_id)
+            for ev in copied_events:
+                mirror.project(ev)
+            graph.add_listener(mirror)
+
+            # Pre-load replay caches from the PARENT's full log so any identical
+            # LLM/tool call on the fork serves from cache instead of re-spending.
+            parent_events = _read_native_events(parent_run_id)
+            try:
+                from activegraph.llm.cache import LLMCache
+                from activegraph.tools.cache import ToolCache
+                replay_caches = dict(
+                    replay_llm_cache=True,
+                    llm_cache=LLMCache.from_events(parent_events),
+                    replay_tool_cache=True,
+                    tool_cache=ToolCache.from_events(parent_events),
+                )
+            except Exception:
+                replay_caches = {}
+        except Exception as exc:
+            # Could not branch lineage — degrade to a fresh continuation.
+            fork_degraded = (parent_run_id, ui_event_id, str(exc))
+            fork_lineage = None
+            replay_caches = {}
+            graph = None
+            if native_store_conn is not None:
+                try:
+                    native_store_conn.close()
+                except Exception:
+                    pass
+            native_store = None
+            native_store_conn = None
+
+    if graph is None:
+        # ── Fresh run: native store as authoritative log + UI projection ───────
+        graph = Graph()
+        native_store, native_store_conn = _open_native_store(run_id)
+        if native_store is not None:
+            graph.attach_store(native_store)
+        mirror = PostgresMirror(conn, run_id, graph)
+        graph.add_listener(mirror)
+        if fork_degraded is not None:
+            _emit_event(graph, "assistant.message.added", {
+                "role": "assistant",
+                "content": (
+                    f"Note: parent run {fork_degraded[0]} has no native event log for "
+                    f"event {fork_degraded[1]}, so this run could not inherit its lineage. "
+                    f"Running as a fresh continuation instead."
+                ),
+            })
 
     # Check for an LLM provider; absent one, the agent runs the deterministic demo.
     has_anthropic = bool(os.environ.get("ANTHROPIC_API_KEY"))
@@ -576,8 +1251,7 @@ def run_with_activegraph(run_id: str, goal: str, work_dir: str, conn, repo_url: 
     llm_provider = None
     if has_anthropic:
         try:
-            from activegraph.llm import AnthropicProvider
-            llm_provider = AnthropicProvider()
+            llm_provider = _anthropic_provider()
         except Exception:
             pass
     elif has_openai:
@@ -612,28 +1286,76 @@ def run_with_activegraph(run_id: str, goal: str, work_dir: str, conn, repo_url: 
         bgraph.emit("task.created", {"task_id": task.id, "title": task.data["title"], "plan_id": plan.id})
         bgraph.emit("task.ready", {"task_id": task.id})
 
-    @behavior(name="task_executor", on=["task.ready"])
-    def task_executor(event, bgraph, ctx):
-        """Execute a task with the available tools, then signal that edits are done."""
+    @behavior(name="task_claimer", on=["task.ready"])
+    def task_claimer(event, bgraph, ctx):
+        """Mark a task in-progress before either executor runs."""
         task_id = event.payload.get("task_id")
         task_obj = bgraph.get_object(task_id)
         if task_obj is None:
             return
-
-        task_description = task_obj.data.get("description", task_obj.data.get("title", ""))
-        bgraph.emit("task.claimed", {"task_id": task_id, "description": task_description})
+        description = task_obj.data.get("description", task_obj.data.get("title", ""))
+        bgraph.emit("task.claimed", {"task_id": task_id, "description": description})
         bgraph.patch_object(task_id, {"status": "in_progress"})
 
-        if llm_provider is None:
-            _run_demo_mode(bgraph, task_id, task_description, work_dir)
-        else:
-            _run_llm_mode(bgraph, task_id, task_description, work_dir)
-
+    def _finish_task(bgraph, task_id):
         bgraph.patch_object(task_id, {"status": "completed"})
         bgraph.emit("task.completed", {"task_id": task_id})
         # Debounced hand-off: one signal per implementation pass wakes the
-        # test_runner (rather than waking it on every individual patch.applied).
+        # test_runner (rather than waking it on every individual patch).
         bgraph.emit("edits.completed", {"task_id": task_id})
+
+    runtime_tools = None
+
+    if llm_provider is None:
+        # ── Demo executor: no provider, deterministic scripted trace ──────────
+        @behavior(name="task_executor", on=["task.ready"])
+        def task_executor(event, bgraph, ctx):
+            task_id = event.payload.get("task_id")
+            task_obj = bgraph.get_object(task_id)
+            if task_obj is None:
+                return
+            description = task_obj.data.get("description", task_obj.data.get("title", ""))
+            _run_demo_mode(bgraph, task_id, description, work_dir)
+            _finish_task(bgraph, task_id)
+    else:
+        # ── LLM executor: the RUNTIME owns the turn loop (@llm_behavior). ──────
+        # The framework assembles the prompt, calls the provider, drives the
+        # read/write/edit/bash tool loop, validates I/O, and emits native
+        # llm.* / tool.* events. Our handler runs once at the end and turns the
+        # recorded tool events into the graph objects the UI renders.
+        from activegraph import llm_behavior
+
+        executor_tools = _build_tools(work_dir)
+        runtime_tools = executor_tools
+
+        system_prompt = (
+            "You are AG Coder, a coding agent built on ActiveGraph. Complete the "
+            "task described in the triggering event by editing files in the work "
+            "directory.\n"
+            "Rules:\n"
+            "- Read a file before editing it.\n"
+            "- Prefer focused edits over large rewrites; write working code.\n"
+            "- Never touch: .env, .git/, node_modules/, package-lock.json.\n"
+            "- Do NOT run git commands — commit/push is handled automatically "
+            "after you finish. Just edit the files.\n"
+            "- When the task is done, reply with a short summary of what you changed."
+        )
+
+        @llm_behavior(
+            name="task_executor",
+            on=["task.ready"],
+            description=system_prompt,
+            tools=executor_tools,
+            max_tool_turns=12,
+            max_tokens=4096,
+            temperature=0,
+        )
+        def task_executor(event, bgraph, ctx, llm_output):
+            """Runs AFTER the runtime's LLM+tool loop; materializes graph objects
+            from the recorded tool events, then completes the task."""
+            task_id = event.payload.get("task_id")
+            _materialize_tool_objects(graph, bgraph, task_id)
+            _finish_task(bgraph, task_id)
 
     @behavior(name="test_runner", on=["edits.completed"])
     def test_runner(event, bgraph, ctx):
@@ -732,26 +1454,209 @@ def run_with_activegraph(run_id: str, goal: str, work_dir: str, conn, repo_url: 
         bgraph.emit("task.created", {"task_id": fix_task.id, "title": fix_task.data["title"]})
         bgraph.emit("task.ready", {"task_id": fix_task.id})
 
+    # ── Observability (opt-in framework hooks) ────────────────────────────────
+    # Structured JSON logging to a per-run file (subprocess stdio is suppressed,
+    # so a file is where it's useful), and a Metrics backend the runtime feeds —
+    # PrometheusMetrics when the optional dep is present, else a no-op.
+    ag_log_stream = None
+    metrics = None
+    try:
+        from activegraph.observability import configure_logging, NoOpMetrics, PrometheusMetrics
+        os.makedirs(work_dir, exist_ok=True)
+        ag_log_stream = open(os.path.join(work_dir, ".ag-agent.log"), "a", encoding="utf-8")
+        configure_logging(level="INFO", json_output=True, stream=ag_log_stream)
+        metrics = PrometheusMetrics() if PrometheusMetrics.available() else NoOpMetrics()
+    except Exception:
+        metrics = None
+
+    # ── Frame: the run's mission context (goal + constraints + success criteria).
+    # Attaching a Frame stamps frame_id provenance on every object/relation/event
+    # the runtime creates, so the whole run is tagged with the mission it served.
+    from activegraph import Frame
+    frame = Frame(
+        goal=goal,
+        constraints=[
+            "Never modify .env, .git/, node_modules/, or package-lock.json",
+            "Do not run git commands — commit/push is handled after the run",
+            "Prefer focused edits over large rewrites",
+        ],
+        success_criteria=[
+            "The requested change is implemented",
+            "Any project tests still pass",
+        ],
+    )
+
+    # ── Budget: hard ceilings. max_cost_usd adds real token-based cost gating —
+    # the runtime estimates each LLM call's cost before spending and stops the run
+    # if it would exceed the ceiling (CONTRACT v0.6 #9). Configurable via env.
     budget = {"max_events": 500, "max_seconds": 300}
-    runtime = Runtime(graph, budget=budget, llm_provider=llm_provider)
+    try:
+        _cost_cap = float(os.environ.get("AGENT_MAX_COST_USD", "1.00"))
+        if _cost_cap > 0:
+            budget["max_cost_usd"] = _cost_cap
+    except (TypeError, ValueError):
+        pass
 
-    # ── Git: clone + branch before the task loop ──────────────────────────────
-    branch_name: str | None = None
-    if repo_url:
-        branch_name, ok = _git_clone_and_branch(run_id, repo_url, work_dir, conn, graph)
-        if not ok:
-            raise RuntimeError("git clone or branch creation failed — see tool.error events")
+    # ── Policy: the agent's declared capabilities, framework-native. This is the
+    # ActiveGraph primitive for "what may this agent do" — replacing the ad-hoc
+    # PROTECTED_PATHS/DANGEROUS_COMMANDS constants as the source of truth for the
+    # agent's permissions. The protected-path / dangerous-command checks in the
+    # tools enforce it; the executor surfaces blocked attempts as policy.denied.
+    # Patches require approval when the run was created with require_approval.
+    from activegraph import Policy
+    policy = Policy(
+        behavior="task_executor",
+        can_call_tool=["read_file", "write_file", "edit_file", "bash"],
+        can_create=["plan", "task", "patch", "file_snapshot", "command_result", "model_call", "test_run"],
+        requires_approval=["patch"] if require_approval else [],
+    )
 
-    _emit_event(graph, "run.started", {"run_id": run_id, "goal": goal})
-    runtime.run_goal(goal)
+    runtime = Runtime(graph, budget=budget, frame=frame, policy=policy, metrics=metrics,
+                      llm_provider=llm_provider, tools=runtime_tools, **replay_caches)
 
-    # ── Git: commit changes locally after the task loop ───────────────────────
-    # The commit is pushed to the remote by the API server via the GitHub REST
-    # API. A commit failure is logged via tool.error but does NOT fail the run.
-    if repo_url and branch_name:
-        _git_commit(run_id, goal, branch_name, work_dir, conn, graph)
+    # ── Pack: declare the coding-agent domain as a typed ActiveGraph Pack. ──
+    # Loading it validates every object/relation against the declared schemas
+    # (plan/task/patch/test_run/…) and contributes a pattern-triggered behavior.
+    # Best-effort: a schema mismatch must not take down a run, so we fall back to
+    # an untyped graph if loading fails.
+    try:
+        from coding_pack import coding_pack
+        runtime.load_pack(coding_pack)
+    except Exception as exc:
+        _emit_event(graph, "pack.load_failed", {"error": str(exc)})
 
-    _emit_event(graph, "run.completed", {"run_id": run_id})
+    try:
+        # ── Git: clone + branch before the task loop ──────────────────────────
+        branch_name: str | None = None
+        if repo_url:
+            branch_name, ok = _git_clone_and_branch(run_id, repo_url, work_dir, conn, graph)
+            if not ok:
+                raise RuntimeError("git clone or branch creation failed — see tool.error events")
+
+        if fork_lineage is not None:
+            _emit_event(graph, "run.forked", {
+                "run_id": run_id,
+                "goal": goal,
+                "parent_run_id": fork_lineage[0],
+                "forked_at_event_id": fork_lineage[1],
+            })
+        else:
+            _emit_event(graph, "run.started", {"run_id": run_id, "goal": goal})
+        runtime.run_goal(goal)
+
+        # run_goal's internal upsert_run nulls the fork lineage columns; re-assert
+        # them so the native store records the parent linkage (CONTRACT v0.5 #11).
+        if fork_lineage is not None and native_store is not None:
+            try:
+                native_store.upsert_run(
+                    parent_run_id=fork_lineage[0],
+                    forked_at_event_id=fork_lineage[1],
+                    created_at=now_iso(),
+                    goal=goal,
+                )
+            except Exception:
+                pass
+
+        # ── Human-in-the-loop gate ────────────────────────────────────────────
+        # If approval is required and the run produced applied patches, PAUSE here:
+        # record a pending approval, emit approval.requested, and leave changes
+        # uncommitted. A human resolves it (see finalize_run) before anything is
+        # committed/pushed. This is the ActiveGraph approval flow surfaced at the
+        # natural boundary for an LLM-driven loop (the completed patch-set).
+        applied_patches = [
+            o for o in graph.objects(type="patch")
+            if (o.data or {}).get("status") == "applied"
+        ]
+        if require_approval and applied_patches:
+            paths = [(o.data or {}).get("path") for o in applied_patches if (o.data or {}).get("path")]
+            summary = f"{len(applied_patches)} file change(s)" + (": " + ", ".join(paths[:6]) if paths else "")
+            approval_id = str(uuid.uuid4())
+            _insert_approval(conn, approval_id, run_id, "patch_set", summary,
+                             {"paths": paths, "patch_count": len(applied_patches)})
+            _emit_event(graph, "approval.requested", {
+                "approval_id": approval_id,
+                "kind": "patch_set",
+                "summary": summary,
+                "paths": paths,
+            })
+            _emit_ops_status(graph, runtime, work_dir)
+            return "awaiting_approval"
+
+        # ── Git: commit changes locally after the task loop ───────────────────
+        # The commit is pushed to the remote by the API server via the GitHub
+        # REST API. A commit failure is logged via tool.error but does NOT fail
+        # the run.
+        if repo_url and branch_name:
+            _git_commit(run_id, goal, branch_name, work_dir, conn, graph)
+
+        _emit_ops_status(graph, runtime, work_dir)
+        _emit_event(graph, "run.completed", {"run_id": run_id})
+        return "completed"
+    finally:
+        # The native store owns its own connection; close it once the run ends.
+        if native_store_conn is not None:
+            try:
+                native_store_conn.close()
+            except Exception:
+                pass
+        if ag_log_stream is not None:
+            try:
+                ag_log_stream.close()
+            except Exception:
+                pass
+
+
+def finalize_run(run_id: str, decision: str, conn) -> str:
+    """Resolve a paused (awaiting_approval) run after a human decision.
+
+    ``decision`` is ``"approve"`` or ``"reject"``. Resumes the run on its native
+    log, emits the framework approval events (``approval.granted`` /
+    ``approval.denied``), and on approval commits the changes (for repo runs) and
+    completes the run; on rejection discards the working-tree changes and marks
+    the run ``rejected``. Returns the terminal status.
+    """
+    # Run metadata (repo/branch/goal/work dir) lives in the runs table.
+    with conn.cursor() as cur:
+        cur.execute("SELECT goal, work_dir, repo_url, repo_branch FROM runs WHERE id = %s", (run_id,))
+        row = cur.fetchone()
+    goal, work_dir, repo_url, branch_name = (row or (None, None, None, None))
+
+    approvals = _pending_approvals(conn, run_id)
+    if not approvals:
+        # Nothing to resolve (already finalized, or never paused). Leave as-is.
+        with conn.cursor() as cur:
+            cur.execute("SELECT status FROM runs WHERE id = %s", (run_id,))
+            r = cur.fetchone()
+        return (r[0] if r else "completed") or "completed"
+
+    graph, sconn = _attach_for_continuation(run_id, conn)
+    try:
+        approved = decision == "approve"
+        for a in approvals:
+            _resolve_approval(conn, a["id"], "approved" if approved else "rejected", "user")
+            _emit_event(graph, "approval.granted" if approved else "approval.denied", {
+                "approval_id": a["id"],
+                "kind": a["kind"],
+                "approved_by": "user",
+            })
+
+        if approved:
+            if repo_url and branch_name and work_dir:
+                _git_commit(run_id, goal or "", branch_name, work_dir, conn, graph)
+            _emit_event(graph, "run.completed", {"run_id": run_id, "approved": True})
+            return "completed"
+        else:
+            # Discard the agent's working-tree changes for repo runs.
+            if repo_url and work_dir and os.path.isdir(os.path.join(work_dir, ".git")):
+                _run_git_cmd(["checkout", "--", "."], cwd=work_dir)
+                _run_git_cmd(["clean", "-fd"], cwd=work_dir)
+            _emit_event(graph, "run.rejected", {"run_id": run_id})
+            return "rejected"
+    finally:
+        try:
+            sconn.close()
+        except Exception:
+            pass
 
 
 def _run_demo_mode(bgraph, task_id, task_description, work_dir):
@@ -812,181 +1717,6 @@ def _run_demo_mode(bgraph, task_id, task_description, work_dir):
     })
 
 
-def _execute_tool_call(bgraph, task_id, tool_name, tool_input, work_dir):
-    """Execute a single tool call, recording graph nodes/events. Returns output text."""
-    if tool_name == "read_file":
-        result = tool_read(
-            tool_input["path"],
-            tool_input.get("start_line"),
-            tool_input.get("end_line"),
-            work_dir,
-        )
-        if result.ok:
-            snap = bgraph.add_object("file_snapshot", {
-                "path": tool_input["path"],
-                "content_preview": result.output[:200],
-                "task_id": task_id,
-            })
-            bgraph.add_relation(task_id, snap.id, "TASK_HAS_FILE_SNAPSHOT")
-            bgraph.emit("file.snapshot.created", {"snapshot_id": snap.id, "path": tool_input["path"]})
-
-    elif tool_name == "write_file":
-        # Read existing content before overwriting so we can produce a real diff.
-        _before_content = ""
-        _write_full_path = Path(work_dir) / tool_input["path"]
-        if _write_full_path.is_file():
-            try:
-                _before_content = _write_full_path.read_text(encoding="utf-8", errors="replace")
-            except Exception:
-                _before_content = ""
-
-        result = tool_write(tool_input["path"], tool_input["content"], work_dir)
-        if result.ok:
-            _after_content = tool_input["content"]
-            _diff_lines = list(difflib.unified_diff(
-                _before_content.splitlines(keepends=True),
-                _after_content.splitlines(keepends=True),
-                fromfile=f"a/{tool_input['path']}",
-                tofile=f"b/{tool_input['path']}",
-                lineterm="",
-            ))
-            _diff_text = "\n".join(_diff_lines)
-            _lines_added = sum(1 for l in _diff_lines if l.startswith("+") and not l.startswith("+++"))
-            _lines_removed = sum(1 for l in _diff_lines if l.startswith("-") and not l.startswith("---"))
-            patch = bgraph.add_object("patch", {
-                "path": tool_input["path"],
-                "type": "write",
-                "status": "applied",
-                "task_id": task_id,
-                "content_preview": tool_input["content"][:200],
-                "diff": _diff_text,
-                "lines_added": _lines_added,
-                "lines_removed": _lines_removed,
-            })
-            bgraph.add_relation(task_id, patch.id, "TASK_HAS_PATCH")
-            # The mirror derives the UI's patch.applied event from this object.
-
-    elif tool_name == "edit_file":
-        # Read existing content before editing for a real diff.
-        _before_content = ""
-        _edit_full_path = Path(work_dir) / tool_input["path"]
-        if _edit_full_path.is_file():
-            try:
-                _before_content = _edit_full_path.read_text(encoding="utf-8", errors="replace")
-            except Exception:
-                _before_content = ""
-
-        result = tool_edit(tool_input["path"], tool_input["search"], tool_input["replace"], work_dir)
-        if result.ok:
-            _after_content = ""
-            try:
-                _after_content = _edit_full_path.read_text(encoding="utf-8", errors="replace")
-            except Exception:
-                _after_content = _before_content.replace(tool_input["search"], tool_input["replace"], 1)
-            _diff_lines = list(difflib.unified_diff(
-                _before_content.splitlines(keepends=True),
-                _after_content.splitlines(keepends=True),
-                fromfile=f"a/{tool_input['path']}",
-                tofile=f"b/{tool_input['path']}",
-                lineterm="",
-            ))
-            _diff_text = "\n".join(_diff_lines)
-            _lines_added = sum(1 for l in _diff_lines if l.startswith("+") and not l.startswith("+++"))
-            _lines_removed = sum(1 for l in _diff_lines if l.startswith("-") and not l.startswith("---"))
-            patch = bgraph.add_object("patch", {
-                "path": tool_input["path"],
-                "type": "edit",
-                "status": "applied",
-                "search_preview": tool_input["search"][:100],
-                "replace_preview": tool_input["replace"][:100],
-                "task_id": task_id,
-                "diff": _diff_text,
-                "lines_added": _lines_added,
-                "lines_removed": _lines_removed,
-            })
-            bgraph.add_relation(task_id, patch.id, "TASK_HAS_PATCH")
-            # The mirror derives the UI's patch.applied event from this object.
-
-    elif tool_name == "bash":
-        danger = is_dangerous(tool_input["command"])
-        if danger:
-            bgraph.emit("dangerous_command.detected", {"command": tool_input["command"], "matched": danger})
-            result = ToolResult(ok=False, output="", error=f"Blocked: {danger}")
-        else:
-            result = tool_bash(tool_input["command"], work_dir, tool_input.get("timeout", 30))
-            cmd_result = bgraph.add_object("command_result", {
-                "command": tool_input["command"],
-                "ok": result.ok,
-                "output_preview": result.output[:300],
-                "task_id": task_id,
-            })
-            bgraph.add_relation(task_id, cmd_result.id, "TASK_HAS_COMMAND_RESULT")
-            bgraph.emit("bash.command.completed", {"ok": result.ok, "command": tool_input["command"]})
-    else:
-        result = ToolResult(ok=False, output="", error=f"Unknown tool: {tool_name}")
-
-    output_content = result.output if result.ok else f"Error: {result.error}"
-    bgraph.emit("tool.responded", {"tool": tool_name, "ok": result.ok, "output": output_content[:500]})
-    return output_content
-
-
-# ── Tool schemas ───────────────────────────────────────────────────────────────
-
-_TOOL_PROPS = {
-    "read_file": {
-        "description": "Read the contents of a file.",
-        "properties": {
-            "path": {"type": "string", "description": "File path relative to work directory"},
-            "start_line": {"type": "integer", "description": "First line to read (1-indexed)"},
-            "end_line": {"type": "integer", "description": "Last line to read (inclusive)"},
-        },
-        "required": ["path"],
-    },
-    "write_file": {
-        "description": "Write content to a file, creating it if needed.",
-        "properties": {
-            "path": {"type": "string", "description": "File path relative to work directory"},
-            "content": {"type": "string", "description": "Full file content to write"},
-        },
-        "required": ["path", "content"],
-    },
-    "edit_file": {
-        "description": "Edit a file by replacing the first occurrence of a string.",
-        "properties": {
-            "path": {"type": "string", "description": "File path relative to work directory"},
-            "search": {"type": "string", "description": "Exact string to find"},
-            "replace": {"type": "string", "description": "Replacement string"},
-        },
-        "required": ["path", "search", "replace"],
-    },
-    "bash": {
-        "description": "Execute a shell command. Dangerous commands are blocked.",
-        "properties": {
-            "command": {"type": "string", "description": "Shell command to run"},
-            "timeout": {"type": "integer", "description": "Timeout in seconds (default 30)"},
-        },
-        "required": ["command"],
-    },
-}
-
-def _anthropic_tools():
-    return [
-        {"name": name, "description": spec["description"],
-         "input_schema": {"type": "object", "properties": spec["properties"], "required": spec["required"]}}
-        for name, spec in _TOOL_PROPS.items()
-    ]
-
-def _openai_tools():
-    return [
-        {"type": "function", "function": {
-            "name": name,
-            "description": spec["description"],
-            "parameters": {"type": "object", "properties": spec["properties"], "required": spec["required"]},
-        }}
-        for name, spec in _TOOL_PROPS.items()
-    ]
-
-
 def _parse_test_output(output: str, framework: str) -> dict:
     """Extract passed/failed/total counts from pytest or jest output."""
     passed = 0
@@ -1018,140 +1748,108 @@ def _parse_test_output(output: str, framework: str) -> dict:
     return {"passed": passed, "failed": failed, "total": total or (passed + failed)}
 
 
-def _run_llm_mode(bgraph, task_id, task_description, work_dir):
-    """Run with a real LLM. Auto-selects Anthropic or OpenAI based on available keys.
-
-    Test execution is NOT done here — the test_runner behavior runs the suite
-    after the task_executor emits ``edits.completed``.
-    """
-    use_openai = bool(os.environ.get("OPENAI_API_KEY")) and not bool(os.environ.get("ANTHROPIC_API_KEY"))
-
-    system_prompt = (
-        f"You are AG Coder, a coding agent powered by ActiveGraph.\n"
-        f"Work directory: {work_dir}\n\n"
-        f"Rules:\n"
-        f"- Read files before editing them\n"
-        f"- Write working, tested code\n"
-        f"- Run tests after making changes\n"
-        f"- Be concise — focused changes over large rewrites\n"
-        f"- Never touch: .env, .git/, node_modules/, package-lock.json\n"
-        f"- Do NOT run any git commands (commit, push, branch, etc.) — committing "
-        f"your changes and pushing to GitHub is handled automatically after you "
-        f"finish. Just edit the files.\n\n"
-        f"Task: {task_description}"
-    )
-
-    bgraph.emit("assistant.message.added", {"role": "system", "content": system_prompt, "task_id": task_id})
-
-    if use_openai:
-        _run_openai_loop(bgraph, task_id, task_description, work_dir, system_prompt)
-    else:
-        _run_anthropic_loop(bgraph, task_id, task_description, work_dir, system_prompt)
-
-
-def _run_anthropic_loop(bgraph, task_id, task_description, work_dir, system_prompt):
-    import anthropic
-    client = anthropic.Anthropic()
-    model = "claude-3-5-haiku-20241022"
-    tools = _anthropic_tools()
-    messages = [{"role": "user", "content": task_description}]
-
-    for i in range(10):
-        bgraph.emit("llm.requested", {"model": model, "iteration": i + 1, "messages": len(messages)})
-        try:
-            response = client.messages.create(
-                model=model, max_tokens=8192, system=system_prompt,
-                tools=tools, messages=messages,
-            )
-        except Exception as e:
-            bgraph.emit("behavior.failed", {"error": str(e), "behavior": "llm_call"})
-            break
-
-        bgraph.emit("llm.responded", {
-            "model": model, "stop_reason": response.stop_reason,
-            "input_tokens": response.usage.input_tokens, "output_tokens": response.usage.output_tokens,
-        })
-
-        tool_calls_this_turn = []
-        text_parts = []
-        for block in response.content:
-            if block.type == "text":
-                text_parts.append(block.text)
-            elif block.type == "tool_use":
-                tool_calls_this_turn.append(block)
-
-        if text_parts:
-            bgraph.emit("assistant.message.added", {"role": "assistant", "content": "\n".join(text_parts), "task_id": task_id})
-
-        messages.append({"role": "assistant", "content": response.content})
-
-        if response.stop_reason == "end_turn" or not tool_calls_this_turn:
-            break
-
-        tool_results = []
-        for tc in tool_calls_this_turn:
-            bgraph.emit("tool.requested", {"tool": tc.name, "input": tc.input, "task_id": task_id})
-            out = _execute_tool_call(bgraph, task_id, tc.name, tc.input, work_dir)
-            tool_results.append({"type": "tool_result", "tool_use_id": tc.id, "content": out})
-        messages.append({"role": "user", "content": tool_results})
-
-
-def _run_openai_loop(bgraph, task_id, task_description, work_dir, system_prompt):
-    from openai import OpenAI
-    client = OpenAI()
-    model = "gpt-4o-mini"
-    tools = _openai_tools()
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": task_description},
-    ]
-
-    for i in range(10):
-        bgraph.emit("llm.requested", {"model": model, "iteration": i + 1, "messages": len(messages)})
-        try:
-            response = client.chat.completions.create(
-                model=model, tools=tools, messages=messages,
-                tool_choice="auto", max_tokens=8192,
-            )
-        except Exception as e:
-            bgraph.emit("behavior.failed", {"error": str(e), "behavior": "llm_call"})
-            break
-
-        msg = response.choices[0].message
-        finish = response.choices[0].finish_reason
-        bgraph.emit("llm.responded", {
-            "model": model, "stop_reason": finish,
-            "input_tokens": response.usage.prompt_tokens,
-            "output_tokens": response.usage.completion_tokens,
-        })
-
-        if msg.content:
-            bgraph.emit("assistant.message.added", {"role": "assistant", "content": msg.content, "task_id": task_id})
-
-        messages.append(msg)
-
-        if finish == "stop" or not msg.tool_calls:
-            break
-
-        tool_results = []
-        for tc in msg.tool_calls:
-            import json as _json
-            tool_input = _json.loads(tc.function.arguments)
-            bgraph.emit("tool.requested", {"tool": tc.function.name, "input": tool_input, "task_id": task_id})
-            out = _execute_tool_call(bgraph, task_id, tc.function.name, tool_input, work_dir)
-            tool_results.append({"role": "tool", "tool_call_id": tc.id, "content": out})
-        messages.extend(tool_results)
-
-
-# ── Main ──────────────────────────────────────────────────────────────────────
-
 def main():
     parser = argparse.ArgumentParser(description="AG Coder runner")
     parser.add_argument("--run-id", required=True, help="Run ID")
-    parser.add_argument("--goal", required=True, help="Agent goal")
+    parser.add_argument("--goal", default=None, help="Agent goal (required unless --rebuild-projection)")
     parser.add_argument("--work-dir", default=".", help="Working directory")
     parser.add_argument("--repo-url", default=None, help="Optional GitHub repo URL to clone, branch, and PR")
+    parser.add_argument(
+        "--rebuild-projection",
+        action="store_true",
+        help=(
+            "Don't run the agent: rebuild the UI projection tables for --run-id "
+            "purely from ActiveGraph's native event store. Demonstrates that the "
+            "UI tables are a derived view of the framework's authoritative log."
+        ),
+    )
+    parser.add_argument(
+        "--fork-from",
+        default=None,
+        help=(
+            "Parent run id to fork from. Copies the parent's native event log up "
+            "to --at-event into this run (shared lineage) and continues forward."
+        ),
+    )
+    parser.add_argument(
+        "--at-event",
+        default=None,
+        help="Event id (UI agent_events.id or native evt_*) to fork at. Requires --fork-from.",
+    )
+    parser.add_argument(
+        "--causal-chain",
+        default=None,
+        metavar="OBJECT_ID",
+        help=(
+            "Don't run the agent: print (as JSON) ActiveGraph's own causal_chain "
+            "for the given object in --run-id, walking provenance back through the "
+            "tool/LLM calls to the goal. Accepts a scoped or local object id."
+        ),
+    )
+    parser.add_argument(
+        "--require-approval",
+        action="store_true",
+        help="Pause at awaiting_approval after producing changes; a human must approve before commit.",
+    )
+    parser.add_argument(
+        "--finalize",
+        action="store_true",
+        help="Don't run the agent: resolve a paused run for --run-id using --decision.",
+    )
+    parser.add_argument(
+        "--decision",
+        choices=["approve", "reject"],
+        default=None,
+        help="Decision for --finalize.",
+    )
     args = parser.parse_args()
+
+    # ── Finalize mode: resolve a paused (awaiting_approval) run ────────────────
+    if args.finalize:
+        if not args.decision:
+            parser.error("--finalize requires --decision approve|reject")
+        conn = get_conn()
+        try:
+            status = finalize_run(args.run_id, args.decision, conn)
+            update_run_status(conn, args.run_id, status)
+            print(f"Run {args.run_id} finalized: {status}")
+        finally:
+            conn.close()
+        return
+
+    # ── Causal-chain mode: framework-native provenance walk for one object ─────
+    if args.causal_chain:
+        print(json.dumps(_causal_chain_json(args.run_id, args.causal_chain)))
+        return
+
+    # ── Rebuild mode: re-project an existing run from the native store ─────────
+    if args.rebuild_projection:
+        store, store_conn = _open_native_store(args.run_id)
+        if store is None:
+            print(
+                "Cannot rebuild: native ActiveGraph PostgresEventStore is "
+                "unavailable (missing psycopg 3 / activegraph[postgres], or no "
+                "DATABASE_URL).",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        app_conn = get_conn()
+        try:
+            n = rebuild_ui_projection(app_conn, store, args.run_id)
+            print(f"Rebuilt UI projection for run {args.run_id} from {n} stored events.")
+        finally:
+            app_conn.close()
+            store_conn.close()
+        return
+
+    if not args.goal:
+        parser.error("--goal is required unless --rebuild-projection is set")
+
+    fork_from = None
+    if args.fork_from or args.at_event:
+        if not (args.fork_from and args.at_event):
+            parser.error("--fork-from and --at-event must be provided together")
+        fork_from = (args.fork_from, args.at_event)
 
     # Disable interactive git credential prompts. GIT_ASKPASS (Replit's
     # replit-git-askpass) has no TTY in a detached subprocess and would cause
@@ -1166,8 +1864,10 @@ def main():
         conn = get_conn()
         update_run_status(conn, args.run_id, "running")
 
-        run_with_activegraph(args.run_id, args.goal, args.work_dir, conn, repo_url=args.repo_url)
-        update_run_status(conn, args.run_id, "completed")
+        status = run_with_activegraph(args.run_id, args.goal, args.work_dir, conn,
+                                      repo_url=args.repo_url, fork_from=fork_from,
+                                      require_approval=args.require_approval)
+        update_run_status(conn, args.run_id, status or "completed")
 
     except KeyboardInterrupt:
         if conn:

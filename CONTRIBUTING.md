@@ -19,7 +19,9 @@ When contributing, please preserve the three things that make it what it is:
 ## Prerequisites
 
 - Node.js 24+ and [pnpm](https://pnpm.io/)
-- Python 3 with `psycopg2` and `activegraph` available on the path (used by the agent subprocess)
+- Python 3 with the agent deps installed (`pip install -r scripts/agent/requirements.txt` —
+  `activegraph[postgres]` brings psycopg 3 for the framework's event store; `psycopg2`
+  backs the app's projection tables)
 - A PostgreSQL database
 
 ## Getting started
@@ -82,16 +84,16 @@ pnpm --filter @workspace/db run push
 
 ## Before opening a pull request
 
-Run the typecheck, tests, and formatting check — these mirror what CI runs:
+Run the checks CI runs — formatting, typecheck, tests, and a build:
 
 ```bash
+pnpm run format:check   # or `pnpm run format` to auto-fix
 pnpm run typecheck
 pnpm run test
-pnpm run format:check   # or `pnpm run format` to auto-fix
+pnpm run build
 ```
 
-CI (`.github/workflows/ci.yml`) runs typecheck, tests, and a build on every push
-and pull request.
+CI (`.github/workflows/ci.yml`) runs all of these on every push and pull request.
 
 Guidelines:
 

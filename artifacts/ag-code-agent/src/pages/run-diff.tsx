@@ -1,23 +1,12 @@
 import { useState } from "react";
 import { useParams, Link } from "wouter";
-import {
-  useDiffRuns,
-  useGetRun,
-  queryConfig,
-} from "@workspace/api-client-react";
+import { useDiffRuns, useGetRun, queryConfig } from "@workspace/api-client-react";
 import type { ObjectDiff } from "@workspace/api-client-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { SplitDiffView } from "@/components/SplitDiffView";
 import { strField } from "@/lib/utils";
-import {
-  ChevronLeft,
-  ChevronDown,
-  ChevronUp,
-  Plus,
-  Minus,
-  RefreshCw,
-} from "lucide-react";
+import { ChevronLeft, ChevronDown, ChevronUp, Plus, Minus, RefreshCw } from "lucide-react";
 
 function statusColor(status: string | undefined) {
   if (status === "completed") return "border-green-500/50 text-green-500";
@@ -52,10 +41,14 @@ function changeIcon(changeType: string) {
 
 function changeBadge(changeType: string) {
   if (changeType === "added")
-    return <Badge className="bg-green-500/10 text-green-500 border-green-500/30 shrink-0">added</Badge>;
+    return (
+      <Badge className="bg-green-500/10 text-green-500 border-green-500/30 shrink-0">added</Badge>
+    );
   if (changeType === "removed")
     return <Badge className="bg-red-500/10 text-red-500 border-red-500/30 shrink-0">removed</Badge>;
-  return <Badge className="bg-amber-500/10 text-amber-500 border-amber-500/30 shrink-0">modified</Badge>;
+  return (
+    <Badge className="bg-amber-500/10 text-amber-500 border-amber-500/30 shrink-0">modified</Badge>
+  );
 }
 
 function StatCell({ label, a, b }: { label: string; a?: number; b?: number }) {
@@ -64,13 +57,17 @@ function StatCell({ label, a, b }: { label: string; a?: number; b?: number }) {
   const diff = vb - va;
   return (
     <div className="flex flex-col gap-1 min-w-[90px]">
-      <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">{label}</span>
+      <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+        {label}
+      </span>
       <div className="flex items-end gap-2">
         <span className="font-mono text-lg font-bold text-foreground">{va}</span>
         <span className="font-mono text-xs text-muted-foreground mb-0.5">→</span>
         <span className="font-mono text-lg font-bold text-foreground">{vb}</span>
         {diff !== 0 && (
-          <span className={`font-mono text-xs mb-0.5 font-semibold ${diff > 0 ? "text-green-500" : "text-red-400"}`}>
+          <span
+            className={`font-mono text-xs mb-0.5 font-semibold ${diff > 0 ? "text-green-500" : "text-red-400"}`}
+          >
             {diff > 0 ? `+${diff}` : diff}
           </span>
         )}
@@ -86,23 +83,29 @@ function ObjectDiffRow({ diff }: { diff: ObjectDiff }) {
     : diff.objectId;
   const isPatch = diff.type === "patch";
   const patchBefore = isPatch ? strField(diff.before?.diff) : undefined;
-  const patchAfter  = isPatch ? strField(diff.after?.diff) : undefined;
+  const patchAfter = isPatch ? strField(diff.after?.diff) : undefined;
 
   return (
-    <div className={`border border-border/50 border-l-2 rounded-lg overflow-hidden ${changeColor(diff.changeType)}`}>
+    <div
+      className={`border border-border/50 border-l-2 rounded-lg overflow-hidden ${changeColor(diff.changeType)}`}
+    >
       <button
         className="w-full flex items-center gap-3 px-4 py-3 hover:bg-muted/30 transition-colors text-left"
-        onClick={() => setExpanded(e => !e)}
+        onClick={() => setExpanded((e) => !e)}
       >
         {changeIcon(diff.changeType)}
-        <span className={`text-[10px] font-mono font-semibold px-2 py-0.5 rounded border ${typeColor(diff.type)}`}>
+        <span
+          className={`text-[10px] font-mono font-semibold px-2 py-0.5 rounded border ${typeColor(diff.type)}`}
+        >
           {diff.type}
         </span>
         <span className="font-mono text-sm text-foreground flex-1 truncate">{localId}</span>
         {changeBadge(diff.changeType)}
-        {expanded
-          ? <ChevronUp className="h-4 w-4 text-muted-foreground shrink-0" />
-          : <ChevronDown className="h-4 w-4 text-muted-foreground shrink-0" />}
+        {expanded ? (
+          <ChevronUp className="h-4 w-4 text-muted-foreground shrink-0" />
+        ) : (
+          <ChevronDown className="h-4 w-4 text-muted-foreground shrink-0" />
+        )}
       </button>
 
       {expanded && (
@@ -120,7 +123,9 @@ function ObjectDiffRow({ diff }: { diff: ObjectDiff }) {
                     </div>
                   </>
                 ) : (
-                  <div className="px-3 py-4 font-mono text-xs text-muted-foreground italic">Not present in Run A</div>
+                  <div className="px-3 py-4 font-mono text-xs text-muted-foreground italic">
+                    Not present in Run A
+                  </div>
                 )}
               </div>
               <div className="overflow-hidden">
@@ -134,7 +139,9 @@ function ObjectDiffRow({ diff }: { diff: ObjectDiff }) {
                     </div>
                   </>
                 ) : (
-                  <div className="px-3 py-4 font-mono text-xs text-muted-foreground italic">Not present in Run B</div>
+                  <div className="px-3 py-4 font-mono text-xs text-muted-foreground italic">
+                    Not present in Run B
+                  </div>
                 )}
               </div>
             </div>
@@ -151,7 +158,9 @@ function ObjectDiffRow({ diff }: { diff: ObjectDiff }) {
                     </pre>
                   </>
                 ) : (
-                  <div className="px-3 py-4 font-mono text-xs text-muted-foreground italic">Not present in Run A</div>
+                  <div className="px-3 py-4 font-mono text-xs text-muted-foreground italic">
+                    Not present in Run A
+                  </div>
                 )}
               </div>
               <div className="flex-1 overflow-hidden">
@@ -165,7 +174,9 @@ function ObjectDiffRow({ diff }: { diff: ObjectDiff }) {
                     </pre>
                   </>
                 ) : (
-                  <div className="px-3 py-4 font-mono text-xs text-muted-foreground italic">Not present in Run B</div>
+                  <div className="px-3 py-4 font-mono text-xs text-muted-foreground italic">
+                    Not present in Run B
+                  </div>
                 )}
               </div>
             </div>
@@ -206,9 +217,9 @@ export default function RunDiff() {
   }
 
   const { summary, objectDiffs = [] } = diff;
-  const added    = objectDiffs.filter(d => d.changeType === "added");
-  const removed  = objectDiffs.filter(d => d.changeType === "removed");
-  const modified = objectDiffs.filter(d => d.changeType === "modified");
+  const added = objectDiffs.filter((d) => d.changeType === "added");
+  const removed = objectDiffs.filter((d) => d.changeType === "removed");
+  const modified = objectDiffs.filter((d) => d.changeType === "modified");
 
   return (
     <div className="min-h-[100dvh] flex flex-col bg-background text-foreground">
@@ -228,11 +239,16 @@ export default function RunDiff() {
       <div className="flex-1 p-6 max-w-6xl mx-auto w-full flex flex-col gap-6">
         {/* Run header cards */}
         <div className="grid grid-cols-2 gap-4">
-          {([
-            { label: "Run A (base)", run: runA, id: runId },
-            { label: "Run B (fork)", run: runB, id: otherId },
-          ] as const).map(({ label, run, id }) => (
-            <div key={id} className="border border-border/50 rounded-lg p-4 bg-card/40 flex flex-col gap-2">
+          {(
+            [
+              { label: "Run A (base)", run: runA, id: runId },
+              { label: "Run B (fork)", run: runB, id: otherId },
+            ] as const
+          ).map(({ label, run, id }) => (
+            <div
+              key={id}
+              className="border border-border/50 rounded-lg p-4 bg-card/40 flex flex-col gap-2"
+            >
               <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
                 {label}
               </span>
@@ -241,7 +257,9 @@ export default function RunDiff() {
                   {run?.status ?? "unknown"}
                 </Badge>
                 {run?.model && (
-                  <Badge variant="secondary" className="font-mono text-xs">{run.model}</Badge>
+                  <Badge variant="secondary" className="font-mono text-xs">
+                    {run.model}
+                  </Badge>
                 )}
               </div>
               <p className="font-mono text-sm text-foreground line-clamp-2">{run?.goal ?? id}</p>
@@ -260,9 +278,9 @@ export default function RunDiff() {
             Summary
           </h2>
           <div className="flex flex-wrap gap-6">
-            <StatCell label="Events"       a={summary.eventsA}      b={summary.eventsB} />
-            <StatCell label="Model Calls"  a={summary.modelCallsA}  b={summary.modelCallsB} />
-            <StatCell label="Tool Calls"   a={summary.toolCallsA}   b={summary.toolCallsB} />
+            <StatCell label="Events" a={summary.eventsA} b={summary.eventsB} />
+            <StatCell label="Model Calls" a={summary.modelCallsA} b={summary.modelCallsB} />
+            <StatCell label="Tool Calls" a={summary.toolCallsA} b={summary.toolCallsB} />
             <StatCell label="Files Changed" a={summary.filesChangedA} b={summary.filesChangedB} />
           </div>
           <div className="flex flex-wrap gap-3 pt-2 border-t border-border/30 text-xs font-mono">
@@ -271,7 +289,8 @@ export default function RunDiff() {
             </span>
             <span className="text-muted-foreground">·</span>
             <span className="text-red-400">
-              <span className="font-bold">{summary.objectsRemovedInB ?? 0}</span> objects removed in B
+              <span className="font-bold">{summary.objectsRemovedInB ?? 0}</span> objects removed in
+              B
             </span>
             <span className="text-muted-foreground">·</span>
             <span className="text-amber-500">
@@ -287,21 +306,28 @@ export default function RunDiff() {
           </div>
         ) : (
           <div className="flex flex-col gap-6">
-            {([
-              { label: "Added in B",  items: added,    accent: "text-green-500" },
-              { label: "Removed in B", items: removed, accent: "text-red-400"   },
-              { label: "Modified",    items: modified,  accent: "text-amber-500" },
-            ] as const).map(({ label, items, accent }) =>
-              items.length > 0 && (
-                <section key={label} className="flex flex-col gap-2">
-                  <h3 className={`font-mono text-xs font-semibold uppercase tracking-wider ${accent}`}>
-                    {label} ({items.length})
-                  </h3>
-                  <div className="flex flex-col gap-2">
-                    {items.map(d => <ObjectDiffRow key={d.objectId} diff={d} />)}
-                  </div>
-                </section>
-              )
+            {(
+              [
+                { label: "Added in B", items: added, accent: "text-green-500" },
+                { label: "Removed in B", items: removed, accent: "text-red-400" },
+                { label: "Modified", items: modified, accent: "text-amber-500" },
+              ] as const
+            ).map(
+              ({ label, items, accent }) =>
+                items.length > 0 && (
+                  <section key={label} className="flex flex-col gap-2">
+                    <h3
+                      className={`font-mono text-xs font-semibold uppercase tracking-wider ${accent}`}
+                    >
+                      {label} ({items.length})
+                    </h3>
+                    <div className="flex flex-col gap-2">
+                      {items.map((d) => (
+                        <ObjectDiffRow key={d.objectId} diff={d} />
+                      ))}
+                    </div>
+                  </section>
+                ),
             )}
           </div>
         )}

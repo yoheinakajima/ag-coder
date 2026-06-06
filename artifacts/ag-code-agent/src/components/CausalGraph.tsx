@@ -19,8 +19,19 @@ import "@xyflow/react/dist/style.css";
 import * as dagre from "@dagrejs/dagre";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
-  MapIcon, CheckSquare, Code, Brain, FileText, Terminal, TestTube,
-  Network, GitBranch, ChevronRight, ChevronDown, X, RotateCcw,
+  MapIcon,
+  CheckSquare,
+  Code,
+  Brain,
+  FileText,
+  Terminal,
+  TestTube,
+  Network,
+  GitBranch,
+  ChevronRight,
+  ChevronDown,
+  X,
+  RotateCcw,
 } from "lucide-react";
 import type { GraphObject, GraphRelation } from "@workspace/api-client-react";
 
@@ -30,46 +41,65 @@ export function getNodeLabel(obj: GraphObject): string {
   const d = obj.data as Record<string, unknown> | null | undefined;
   if (!d) return obj.type;
   switch (obj.type) {
-    case "plan": return String(d.title ?? "Plan");
-    case "task": return String(d.title ?? (typeof d.description === "string" ? d.description.slice(0, 40) : "Task"));
-    case "patch": return String(d.path ?? "Patch");
-    case "file_snapshot": return String(d.path ?? "Snapshot");
-    case "command_result": return typeof d.command === "string" ? d.command.slice(0, 35) : "Command";
-    case "test_run": return d.status ? `Tests: ${d.status}` : "Test run";
-    case "model_call": return String(d.model ?? "LLM call");
-    default: return obj.type;
+    case "plan":
+      return String(d.title ?? "Plan");
+    case "task":
+      return String(
+        d.title ?? (typeof d.description === "string" ? d.description.slice(0, 40) : "Task"),
+      );
+    case "patch":
+      return String(d.path ?? "Patch");
+    case "file_snapshot":
+      return String(d.path ?? "Snapshot");
+    case "command_result":
+      return typeof d.command === "string" ? d.command.slice(0, 35) : "Command";
+    case "test_run":
+      return d.status ? `Tests: ${d.status}` : "Test run";
+    case "model_call":
+      return String(d.model ?? "LLM call");
+    default:
+      return obj.type;
   }
 }
 
 export function getGraphIcon(type: string, size = "h-3.5 w-3.5") {
   switch (type) {
-    case "plan":           return <MapIcon className={`${size} text-blue-500 shrink-0`} />;
-    case "task":           return <CheckSquare className={`${size} text-purple-400 shrink-0`} />;
-    case "patch":          return <Code className={`${size} text-orange-400 shrink-0`} />;
-    case "model_call":     return <Brain className={`${size} text-gray-400 shrink-0`} />;
-    case "file_snapshot":  return <FileText className={`${size} text-amber-400 shrink-0`} />;
-    case "command_result": return <Terminal className={`${size} text-yellow-400 shrink-0`} />;
-    case "test_run":       return <TestTube className={`${size} text-green-400 shrink-0`} />;
+    case "plan":
+      return <MapIcon className={`${size} text-blue-500 shrink-0`} />;
+    case "task":
+      return <CheckSquare className={`${size} text-purple-400 shrink-0`} />;
+    case "patch":
+      return <Code className={`${size} text-orange-400 shrink-0`} />;
+    case "model_call":
+      return <Brain className={`${size} text-gray-400 shrink-0`} />;
+    case "file_snapshot":
+      return <FileText className={`${size} text-amber-400 shrink-0`} />;
+    case "command_result":
+      return <Terminal className={`${size} text-yellow-400 shrink-0`} />;
+    case "test_run":
+      return <TestTube className={`${size} text-green-400 shrink-0`} />;
     case "git_clone":
-    case "git_commit":     return <GitBranch className={`${size} text-teal-400 shrink-0`} />;
-    default:               return <Network className={`${size} text-muted-foreground shrink-0`} />;
+    case "git_commit":
+      return <GitBranch className={`${size} text-teal-400 shrink-0`} />;
+    default:
+      return <Network className={`${size} text-muted-foreground shrink-0`} />;
   }
 }
 
 // ── Node color palette ────────────────────────────────────────────────────────
 
 const NODE_COLORS: Record<string, { border: string; bg: string }> = {
-  plan:           { border: "#3b82f6", bg: "rgba(59,130,246,0.12)"  },
-  task:           { border: "#8b5cf6", bg: "rgba(139,92,246,0.12)"  },
-  patch:          { border: "#f97316", bg: "rgba(249,115,22,0.12)"  },
-  model_call:     { border: "#6b7280", bg: "rgba(107,114,128,0.12)" },
-  file_snapshot:  { border: "#f59e0b", bg: "rgba(245,158,11,0.12)"  },
-  command_result: { border: "#eab308", bg: "rgba(234,179,8,0.12)"   },
-  test_run:       { border: "#22c55e", bg: "rgba(34,197,94,0.12)"   },
-  git_clone:      { border: "#14b8a6", bg: "rgba(20,184,166,0.12)"  },
-  git_commit:     { border: "#14b8a6", bg: "rgba(20,184,166,0.12)"  },
+  plan: { border: "#3b82f6", bg: "rgba(59,130,246,0.12)" },
+  task: { border: "#8b5cf6", bg: "rgba(139,92,246,0.12)" },
+  patch: { border: "#f97316", bg: "rgba(249,115,22,0.12)" },
+  model_call: { border: "#6b7280", bg: "rgba(107,114,128,0.12)" },
+  file_snapshot: { border: "#f59e0b", bg: "rgba(245,158,11,0.12)" },
+  command_result: { border: "#eab308", bg: "rgba(234,179,8,0.12)" },
+  test_run: { border: "#22c55e", bg: "rgba(34,197,94,0.12)" },
+  git_clone: { border: "#14b8a6", bg: "rgba(20,184,166,0.12)" },
+  git_commit: { border: "#14b8a6", bg: "rgba(20,184,166,0.12)" },
 };
-const FAIL_COLOR  = { border: "#ef4444", bg: "rgba(239,68,68,0.12)" };
+const FAIL_COLOR = { border: "#ef4444", bg: "rgba(239,68,68,0.12)" };
 const DEFAULT_COLOR = { border: "#4b5563", bg: "rgba(75,85,99,0.12)" };
 
 // ── Custom node component (must live outside the parent component) ─────────────
@@ -161,8 +191,8 @@ function computeLayout(
   g.setDefaultEdgeLabel(() => ({}));
   g.setGraph({ rankdir: "TB", nodesep: 40, ranksep: 64, marginx: 24, marginy: 24 });
 
-  objects.forEach(obj => g.setNode(obj.id, { width: NODE_W, height: NODE_H }));
-  relations.forEach(rel => {
+  objects.forEach((obj) => g.setNode(obj.id, { width: NODE_W, height: NODE_H }));
+  relations.forEach((rel) => {
     if (g.hasNode(rel.source) && g.hasNode(rel.target)) {
       g.setEdge(rel.source, rel.target);
     }
@@ -170,7 +200,7 @@ function computeLayout(
 
   (dagre as any).layout(g);
 
-  const nodes: CausalRFNode[] = objects.map(obj => {
+  const nodes: CausalRFNode[] = objects.map((obj) => {
     const pos = g.node(obj.id);
     return {
       id: obj.id,
@@ -180,7 +210,7 @@ function computeLayout(
     };
   });
 
-  const edges: RFEdge[] = relations.map(rel => ({
+  const edges: RFEdge[] = relations.map((rel) => ({
     id: rel.id,
     source: rel.source,
     target: rel.target,
@@ -215,8 +245,8 @@ function NodeDetailPanel({
   onClose: () => void;
 }) {
   const data = obj.data as Record<string, unknown> | null | undefined;
-  const outgoing = allRelations.filter(r => r.source === obj.id);
-  const incoming = allRelations.filter(r => r.target === obj.id);
+  const outgoing = allRelations.filter((r) => r.source === obj.id);
+  const incoming = allRelations.filter((r) => r.target === obj.id);
 
   function renderValue(val: unknown): string {
     if (val === null || val === undefined) return "—";
@@ -237,7 +267,9 @@ function NodeDetailPanel({
       <div className="flex items-center justify-between px-3 py-1.5 border-b border-border/40 shrink-0">
         <div className="flex items-center gap-1.5">
           {getGraphIcon(obj.type, "h-3 w-3")}
-          <span className="font-mono text-[11px] font-semibold text-foreground uppercase">{obj.type}</span>
+          <span className="font-mono text-[11px] font-semibold text-foreground uppercase">
+            {obj.type}
+          </span>
           <span className="font-mono text-[9px] text-muted-foreground">{obj.id.slice(0, 14)}</span>
         </div>
         <button
@@ -254,31 +286,37 @@ function NodeDetailPanel({
               {entries.map(([k, v]) => (
                 <div key={k} className="flex gap-2 min-w-0">
                   <span className="text-muted-foreground shrink-0 w-20 truncate pt-px">{k}</span>
-                  <span className="text-foreground break-all leading-relaxed">{renderValue(v)}</span>
+                  <span className="text-foreground break-all leading-relaxed">
+                    {renderValue(v)}
+                  </span>
                 </div>
               ))}
             </div>
           )}
           {(outgoing.length > 0 || incoming.length > 0) && (
             <div className="flex flex-col gap-1 pt-1.5 border-t border-border/30">
-              {outgoing.map(r => {
-                const target = allObjects.find(o => o.id === r.target);
+              {outgoing.map((r) => {
+                const target = allObjects.find((o) => o.id === r.target);
                 return (
                   <div key={r.id} className="flex items-center gap-1.5">
                     <span className="text-muted-foreground shrink-0">→</span>
-                    <span className="bg-primary/10 text-primary px-1 rounded text-[9px] uppercase shrink-0">{r.type}</span>
+                    <span className="bg-primary/10 text-primary px-1 rounded text-[9px] uppercase shrink-0">
+                      {r.type}
+                    </span>
                     <span className="text-muted-foreground truncate">
                       {target ? getNodeLabel(target) : r.target.slice(0, 10)}
                     </span>
                   </div>
                 );
               })}
-              {incoming.map(r => {
-                const src = allObjects.find(o => o.id === r.source);
+              {incoming.map((r) => {
+                const src = allObjects.find((o) => o.id === r.source);
                 return (
                   <div key={r.id} className="flex items-center gap-1.5">
                     <span className="text-muted-foreground shrink-0">←</span>
-                    <span className="bg-muted text-muted-foreground px-1 rounded text-[9px] uppercase shrink-0">{r.type}</span>
+                    <span className="bg-muted text-muted-foreground px-1 rounded text-[9px] uppercase shrink-0">
+                      {r.type}
+                    </span>
                     <span className="text-muted-foreground truncate">
                       {src ? getNodeLabel(src) : r.source.slice(0, 10)}
                     </span>
@@ -306,14 +344,14 @@ interface GraphTreeNode {
 
 function buildTree(objects: GraphObject[], relations: GraphRelation[]): GraphTreeNode[] {
   if (!objects.length) return [];
-  const targetIds = new Set(relations.map(r => r.target));
-  const roots = objects.filter(o => !targetIds.has(o.id));
+  const targetIds = new Set(relations.map((r) => r.target));
+  const roots = objects.filter((o) => !targetIds.has(o.id));
 
   function buildChildren(parentId: string, depth: number, visited: Set<string>): GraphTreeNode[] {
     const result: GraphTreeNode[] = [];
     for (const r of relations) {
       if (r.source !== parentId || visited.has(r.target)) continue;
-      const child = objects.find(o => o.id === r.target);
+      const child = objects.find((o) => o.id === r.target);
       if (!child) continue;
       const next = new Set(visited).add(r.target);
       result.push({ obj: child, children: buildChildren(child.id, depth + 1, next), depth });
@@ -321,7 +359,7 @@ function buildTree(objects: GraphObject[], relations: GraphRelation[]): GraphTre
     return result;
   }
 
-  return roots.map(obj => ({
+  return roots.map((obj) => ({
     obj,
     children: buildChildren(obj.id, 1, new Set([obj.id])),
     depth: 0,
@@ -329,7 +367,11 @@ function buildTree(objects: GraphObject[], relations: GraphRelation[]): GraphTre
 }
 
 function TreeNodeRow({
-  node, selectedId, onSelect, collapsed, onToggle,
+  node,
+  selectedId,
+  onSelect,
+  collapsed,
+  onToggle,
 }: {
   node: GraphTreeNode;
   selectedId: string | null;
@@ -350,13 +392,18 @@ function TreeNodeRow({
         <button
           className={`h-5 w-5 flex items-center justify-center shrink-0 rounded transition-colors
             ${hasChildren ? "text-muted-foreground hover:text-foreground hover:bg-muted/50" : "opacity-0 pointer-events-none"}`}
-          onClick={e => { e.stopPropagation(); if (hasChildren) onToggle(obj.id); }}
+          onClick={(e) => {
+            e.stopPropagation();
+            if (hasChildren) onToggle(obj.id);
+          }}
           tabIndex={hasChildren ? 0 : -1}
         >
-          {hasChildren && (isCollapsed
-            ? <ChevronRight className="h-3 w-3" />
-            : <ChevronDown className="h-3 w-3" />
-          )}
+          {hasChildren &&
+            (isCollapsed ? (
+              <ChevronRight className="h-3 w-3" />
+            ) : (
+              <ChevronDown className="h-3 w-3" />
+            ))}
         </button>
         <button
           onClick={() => onSelect(isSelected ? null : obj.id)}
@@ -365,8 +412,12 @@ function TreeNodeRow({
         >
           {getGraphIcon(obj.type)}
           <div className="flex flex-col min-w-0 flex-1">
-            <span className="font-mono text-[11px] font-medium truncate leading-tight text-foreground">{label}</span>
-            <span className="font-mono text-[9px] text-muted-foreground leading-tight uppercase tracking-wider">{obj.type}</span>
+            <span className="font-mono text-[11px] font-medium truncate leading-tight text-foreground">
+              {label}
+            </span>
+            <span className="font-mono text-[9px] text-muted-foreground leading-tight uppercase tracking-wider">
+              {obj.type}
+            </span>
           </div>
           {hasChildren && (
             <span className="font-mono text-[9px] text-muted-foreground shrink-0 ml-1 tabular-nums">
@@ -378,7 +429,7 @@ function TreeNodeRow({
       {hasChildren && !isCollapsed && (
         <div style={{ marginLeft: `${indent + 10}px` }} className="border-l border-border/40 pl-px">
           <div className="flex flex-col gap-0.5 py-0.5">
-            {children.map(child => (
+            {children.map((child) => (
               <TreeNodeRow
                 key={child.obj.id}
                 node={child}
@@ -396,7 +447,10 @@ function TreeNodeRow({
 }
 
 function TreeFallback({
-  objects, relations, selectedId, onSelect,
+  objects,
+  relations,
+  selectedId,
+  onSelect,
 }: {
   objects: GraphObject[];
   relations: GraphRelation[];
@@ -407,9 +461,10 @@ function TreeFallback({
   const tree = useMemo(() => buildTree(objects, relations), [objects, relations]);
 
   const handleToggle = useCallback((id: string) => {
-    setCollapsed(prev => {
+    setCollapsed((prev) => {
       const next = new Set(prev);
-      if (next.has(id)) next.delete(id); else next.add(id);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
       return next;
     });
   }, []);
@@ -417,7 +472,7 @@ function TreeFallback({
   return (
     <ScrollArea className="flex-1 min-h-0">
       <div className="py-2 px-1 flex flex-col gap-0.5">
-        {tree.map(node => (
+        {tree.map((node) => (
           <TreeNodeRow
             key={node.obj.id}
             node={node}
@@ -448,11 +503,14 @@ export function CausalGraph({ objects, relations, onNodeSelect }: CausalGraphPro
 
   // Stable topology key so layout re-runs only when the actual graph changes,
   // not just because the array reference changed.
-  const topoKey = `${objects.map(o => o.id).join(",")}|${relations.map(r => r.id).join(",")}`;
+  const topoKey = `${objects.map((o) => o.id).join(",")}|${relations.map((r) => r.id).join(",")}`;
 
   // Compute dagre layout only when graph topology changes (not on selection)
   const layoutData = useMemo(
-    () => (hasRelations ? computeLayout(objects, relations) : { nodes: [] as CausalRFNode[], edges: [] as RFEdge[] }),
+    () =>
+      hasRelations
+        ? computeLayout(objects, relations)
+        : { nodes: [] as CausalRFNode[], edges: [] as RFEdge[] },
     // topoKey captures full topology; objects/relations refs change every poll cycle
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [topoKey, hasRelations],
@@ -465,9 +523,9 @@ export function CausalGraph({ objects, relations, onNodeSelect }: CausalGraphPro
   // Incremental layout: merge fresh dagre output with any positions the user
   // (or a previous layout) already established, so existing nodes never jump.
   useEffect(() => {
-    setNodes(prev => {
-      const prevById = new Map(prev.map(n => [n.id, n]));
-      return layoutData.nodes.map(n => {
+    setNodes((prev) => {
+      const prevById = new Map(prev.map((n) => [n.id, n]));
+      return layoutData.nodes.map((n) => {
         const existing = prevById.get(n.id);
         return {
           ...n,
@@ -483,43 +541,45 @@ export function CausalGraph({ objects, relations, onNodeSelect }: CausalGraphPro
     const fresh = hasRelations
       ? computeLayout(objects, relations)
       : { nodes: [] as CausalRFNode[], edges: [] as RFEdge[] };
-    setNodes(fresh.nodes.map(n => ({ ...n, selected: n.id === selectedId })));
+    setNodes(fresh.nodes.map((n) => ({ ...n, selected: n.id === selectedId })));
   }, [objects, relations, hasRelations, selectedId, setNodes]);
 
   // Edge labels only on hover (#35) to keep the graph readable when dense.
   const displayEdges = useMemo(
-    () => layoutData.edges.map(e => {
-      const active = e.id === hoveredEdgeId;
-      return {
-        ...e,
-        label: active ? e.label : undefined,
-        style: active
-          ? { ...(e.style as object), stroke: "#64748b", strokeWidth: 2 }
-          : e.style,
-        markerEnd: active
-          ? { type: MarkerType.ArrowClosed, color: "#64748b", width: 14, height: 14 }
-          : e.markerEnd,
-      };
-    }),
+    () =>
+      layoutData.edges.map((e) => {
+        const active = e.id === hoveredEdgeId;
+        return {
+          ...e,
+          label: active ? e.label : undefined,
+          style: active ? { ...(e.style as object), stroke: "#64748b", strokeWidth: 2 } : e.style,
+          markerEnd: active
+            ? { type: MarkerType.ArrowClosed, color: "#64748b", width: 14, height: 14 }
+            : e.markerEnd,
+        };
+      }),
     [layoutData.edges, hoveredEdgeId],
   );
 
   const handleNodeClick: NodeMouseHandler = useCallback(
     (_evt: React.MouseEvent, node: RFNode) => {
       const id = node.id;
-      setSelectedId(prev => (prev === id ? null : id));
+      setSelectedId((prev) => (prev === id ? null : id));
       if (onNodeSelect) {
-        const obj = objects.find(o => o.id === id) ?? null;
+        const obj = objects.find((o) => o.id === id) ?? null;
         onNodeSelect(obj);
       }
     },
     [objects, onNodeSelect],
   );
 
-  const handleEdgeEnter: EdgeMouseHandler = useCallback((_e, edge) => setHoveredEdgeId(edge.id), []);
+  const handleEdgeEnter: EdgeMouseHandler = useCallback(
+    (_e, edge) => setHoveredEdgeId(edge.id),
+    [],
+  );
   const handleEdgeLeave: EdgeMouseHandler = useCallback(() => setHoveredEdgeId(null), []);
 
-  const selectedObj = selectedId ? (objects.find(o => o.id === selectedId) ?? null) : null;
+  const selectedObj = selectedId ? (objects.find((o) => o.id === selectedId) ?? null) : null;
 
   if (!objects.length) {
     return (
@@ -541,7 +601,10 @@ export function CausalGraph({ objects, relations, onNodeSelect }: CausalGraphPro
             onNodeClick={handleNodeClick}
             onEdgeMouseEnter={handleEdgeEnter}
             onEdgeMouseLeave={handleEdgeLeave}
-            onPaneClick={() => { setSelectedId(null); onNodeSelect?.(null); }}
+            onPaneClick={() => {
+              setSelectedId(null);
+              onNodeSelect?.(null);
+            }}
             fitView
             fitViewOptions={{ padding: 0.18, maxZoom: 1.2 }}
             colorMode="dark"
@@ -572,8 +635,8 @@ export function CausalGraph({ objects, relations, onNodeSelect }: CausalGraphPro
               }}
             />
             <MiniMap
-              nodeColor={node => {
-                const d = (node.data as CausalNodeData | undefined);
+              nodeColor={(node) => {
+                const d = node.data as CausalNodeData | undefined;
                 return (NODE_COLORS[d?.type ?? ""] ?? DEFAULT_COLOR).border;
               }}
               maskColor="rgba(0,0,0,0.55)"

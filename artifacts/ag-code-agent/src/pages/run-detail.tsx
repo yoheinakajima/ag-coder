@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState, useMemo, useCallback } from "react";
 import { useParams, Link, useLocation } from "wouter";
-import { 
-  useGetRun, 
-  useGetRunEvents, 
+import {
+  useGetRun,
+  useGetRunEvents,
   useGetRunGraph,
   useForkRun,
   useCancelRun,
@@ -15,27 +15,42 @@ import {
   getGetRunEventsQueryKey,
   getGetRunQueryKey,
   getGetRunGraphQueryKey,
-  queryConfig
+  queryConfig,
 } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
-import {
-  ResizableHandle,
-  ResizablePanel,
-  ResizablePanelGroup,
-} from "@/components/ui/resizable";
+import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Slider } from "@/components/ui/slider";
-import { 
-  Square, GitFork, ChevronLeft,
-  FileText, TestTube,
-  ShieldAlert, ChevronDown, ChevronUp, Folder, ArrowLeft, GitPullRequest, GitCompareArrows,
-  Play, Pause, ChevronRight, SkipBack, Rewind
+import {
+  Square,
+  GitFork,
+  ChevronLeft,
+  FileText,
+  TestTube,
+  ShieldAlert,
+  ChevronDown,
+  ChevronUp,
+  Folder,
+  ArrowLeft,
+  GitPullRequest,
+  GitCompareArrows,
+  Play,
+  Pause,
+  ChevronRight,
+  SkipBack,
+  Rewind,
 } from "lucide-react";
 import { CausalGraph } from "@/components/CausalGraph";
-import type { AgentEvent, GraphObject, PermissionDecisionDecision } from "@workspace/api-client-react";
+import { CausalChainPanel } from "@/components/CausalChainPanel";
+import { ApprovalBanner } from "@/components/ApprovalBanner";
+import type {
+  AgentEvent,
+  GraphObject,
+  PermissionDecisionDecision,
+} from "@workspace/api-client-react";
 import { toast } from "sonner";
 import { useElapsedTime } from "@/hooks/use-elapsed-time";
 import { useReplay } from "@/hooks/use-replay";
@@ -73,20 +88,22 @@ export default function RunDetail() {
   const { data: run, isLoading: runLoading } = useGetRun(runId, {
     query: queryConfig({
       refetchInterval: (data: any) =>
-        (data?.state?.data?.status === "running" || data?.state?.data?.status === "pending") ? 3000 : false
-    })
+        data?.state?.data?.status === "running" || data?.state?.data?.status === "pending"
+          ? 3000
+          : false,
+    }),
   });
 
   const { data: eventsData, isLoading: eventsLoading } = useGetRunEvents(runId, {
     query: queryConfig({
-      refetchInterval: run?.status === "running" ? 2000 : false
-    })
+      refetchInterval: run?.status === "running" ? 2000 : false,
+    }),
   });
 
   const { data: graphData, isLoading: graphLoading } = useGetRunGraph(runId, {
     query: queryConfig({
-      refetchInterval: run?.status === "running" ? 2000 : false
-    })
+      refetchInterval: run?.status === "running" ? 2000 : false,
+    }),
   });
 
   const cancelRun = useCancelRun();
@@ -96,13 +113,14 @@ export default function RunDetail() {
 
   const isCompleted = run?.status === "completed";
   const { data: testAvailability } = useGetRunTestAvailability(runId ?? "", {
-    query: queryConfig({ enabled: !!runId && isCompleted })
+    query: queryConfig({ enabled: !!runId && isCompleted }),
   });
   const hasTests = testAvailability?.hasTests ?? null;
 
   const [streamEvents, setStreamEvents] = useState<AgentEvent[]>([]);
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
   const [highlightedEventId, setHighlightedEventId] = useState<string | null>(null);
+  const [selectedNode, setSelectedNode] = useState<GraphObject | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const isRunning = run?.status === "running" || run?.status === "pending";
@@ -113,12 +131,12 @@ export default function RunDetail() {
     if (!isRunning || !runId) return;
 
     const es = new EventSource(`/api/runs/${runId}/stream`);
-    
-    es.addEventListener('agent_event', (e) => {
+
+    es.addEventListener("agent_event", (e) => {
       try {
         const event = JSON.parse(e.data) as AgentEvent;
-        setStreamEvents(prev => {
-          if (prev.find(p => p.id === event.id)) return prev;
+        setStreamEvents((prev) => {
+          if (prev.find((p) => p.id === event.id)) return prev;
           return [...prev, event].sort((a, b) => a.seq - b.seq);
         });
         queryClient.invalidateQueries({ queryKey: getGetRunGraphQueryKey(runId) });
@@ -127,7 +145,7 @@ export default function RunDetail() {
       }
     });
 
-    es.addEventListener('run_done', () => {
+    es.addEventListener("run_done", () => {
       queryClient.invalidateQueries({ queryKey: getGetRunQueryKey(runId) });
       queryClient.invalidateQueries({ queryKey: getGetRunEventsQueryKey(runId) });
       queryClient.invalidateQueries({ queryKey: getGetRunGraphQueryKey(runId) });
@@ -140,8 +158,8 @@ export default function RunDetail() {
   // Combine polled events and stream events
   const allEvents = useMemo(() => {
     const map = new Map<string, AgentEvent>();
-    (eventsData || []).forEach(e => map.set(e.id, e));
-    streamEvents.forEach(e => map.set(e.id, e));
+    (eventsData || []).forEach((e) => map.set(e.id, e));
+    streamEvents.forEach((e) => map.set(e.id, e));
     return Array.from(map.values()).sort((a, b) => a.seq - b.seq);
   }, [eventsData, streamEvents]);
 
@@ -155,11 +173,11 @@ export default function RunDetail() {
     if (!replay.isReplaying) return graphData?.objects ?? [];
     const seenLocalIds = new Set(
       displayEvents
-        .filter(e => e.type === "object.created")
-        .map(e => strField(e.payload?.id))
-        .filter((id): id is string => !!id)
+        .filter((e) => e.type === "object.created")
+        .map((e) => strField(e.payload?.id))
+        .filter((id): id is string => !!id),
     );
-    return (graphData?.objects ?? []).filter(obj => {
+    return (graphData?.objects ?? []).filter((obj) => {
       const localId = obj.id.includes(":") ? obj.id.split(":").slice(1).join(":") : obj.id;
       return seenLocalIds.has(localId);
     });
@@ -167,9 +185,9 @@ export default function RunDetail() {
 
   const replayRelations = useMemo(() => {
     if (!replay.isReplaying) return graphData?.relations ?? [];
-    const seenObjIds = new Set(replayObjects.map(o => o.id));
+    const seenObjIds = new Set(replayObjects.map((o) => o.id));
     return (graphData?.relations ?? []).filter(
-      rel => seenObjIds.has(rel.source) && seenObjIds.has(rel.target)
+      (rel) => seenObjIds.has(rel.source) && seenObjIds.has(rel.target),
     );
   }, [replay.isReplaying, replayObjects, graphData?.relations]);
 
@@ -194,78 +212,95 @@ export default function RunDetail() {
 
   const handleCancel = () => {
     if (!runId) return;
-    cancelRun.mutate({ runId }, {
-      onSuccess: () => {
-        toast.success("Run cancelled");
-        queryClient.invalidateQueries({ queryKey: getGetRunQueryKey(runId) });
-      }
-    });
+    cancelRun.mutate(
+      { runId },
+      {
+        onSuccess: () => {
+          toast.success("Run cancelled");
+          queryClient.invalidateQueries({ queryKey: getGetRunQueryKey(runId) });
+        },
+      },
+    );
   };
 
   const handleFork = () => {
     if (!runId || !allEvents.length) return;
     const lastEvent = allEvents[allEvents.length - 1];
-    forkRun.mutate({ runId, data: { atEventId: lastEvent.id } }, {
-      onSuccess: (newRun) => {
-        window.location.href = `/runs/${newRun.id}`;
-      }
-    });
+    forkRun.mutate(
+      { runId, data: { atEventId: lastEvent.id } },
+      {
+        onSuccess: (newRun) => {
+          window.location.href = `/runs/${newRun.id}`;
+        },
+      },
+    );
   };
 
   const handleRunTests = () => {
     if (!runId) return;
-    runTest.mutate({ runId }, {
-      onSuccess: (result) => {
-        toast.success(`Tests ${result.status}: ${result.passed} passed, ${result.failed} failed`);
-        queryClient.invalidateQueries({ queryKey: getGetRunEventsQueryKey(runId) });
+    runTest.mutate(
+      { runId },
+      {
+        onSuccess: (result) => {
+          toast.success(`Tests ${result.status}: ${result.passed} passed, ${result.failed} failed`);
+          queryClient.invalidateQueries({ queryKey: getGetRunEventsQueryKey(runId) });
+        },
+        onError: (err: any) => {
+          const msg = err?.response?.data?.error || "Failed to run tests";
+          toast.error(msg);
+        },
       },
-      onError: (err: any) => {
-        const msg = err?.response?.data?.error || "Failed to run tests";
-        toast.error(msg);
-      }
-    });
+    );
   };
 
   // Cross-reference a clicked graph node to the event stream
-  const handleGraphNodeSelect = useCallback((obj: GraphObject | null) => {
-    if (!obj) {
-      setHighlightedEventId(null);
-      return;
-    }
-    // Patch nodes → open file in browser panel
-    if (obj.type === "patch") {
-      const path = strField(obj.data?.path);
-      if (path) setSelectedFile(path);
-    }
-    // All nodes → find a matching event and scroll/highlight it
-    // Graph object IDs are scoped as "{runPrefix}:{localId}" — match on localId
-    const localId = obj.id.includes(":") ? obj.id.split(":").slice(1).join(":") : obj.id;
-    const matchingEvent = allEvents.find(e => {
-      // object.created events carry the local graph id as payload.id
-      return e.payload?.id === localId || e.payload?.object_id === localId;
-    });
-    if (matchingEvent) {
-      setHighlightedEventId(matchingEvent.id);
-      setTimeout(() => {
-        document.getElementById(`ev-${matchingEvent.id}`)?.scrollIntoView({
-          behavior: "smooth",
-          block: "center",
-        });
-      }, 50);
-    }
-  }, [allEvents]);
+  const handleGraphNodeSelect = useCallback(
+    (obj: GraphObject | null) => {
+      if (!obj) {
+        setHighlightedEventId(null);
+        setSelectedNode(null);
+        return;
+      }
+      setSelectedNode(obj);
+      // Patch nodes → open file in browser panel
+      if (obj.type === "patch") {
+        const path = strField(obj.data?.path);
+        if (path) setSelectedFile(path);
+      }
+      // All nodes → find a matching event and scroll/highlight it
+      // Graph object IDs are scoped as "{runPrefix}:{localId}" — match on localId
+      const localId = obj.id.includes(":") ? obj.id.split(":").slice(1).join(":") : obj.id;
+      const matchingEvent = allEvents.find((e) => {
+        // object.created events carry the local graph id as payload.id
+        return e.payload?.id === localId || e.payload?.object_id === localId;
+      });
+      if (matchingEvent) {
+        setHighlightedEventId(matchingEvent.id);
+        setTimeout(() => {
+          document.getElementById(`ev-${matchingEvent.id}`)?.scrollIntoView({
+            behavior: "smooth",
+            block: "center",
+          });
+        }, 50);
+      }
+    },
+    [allEvents],
+  );
 
   const handlePerm = (eventId: string, permId: string, decision: PermissionDecisionDecision) => {
     if (!runId) return;
-    resolvePerm.mutate({
-      runId,
-      permId,
-      data: { decision }
-    }, {
-      onSuccess: () => {
-        queryClient.invalidateQueries({ queryKey: getGetRunEventsQueryKey(runId) });
-      }
-    });
+    resolvePerm.mutate(
+      {
+        runId,
+        permId,
+        data: { decision },
+      },
+      {
+        onSuccess: () => {
+          queryClient.invalidateQueries({ queryKey: getGetRunEventsQueryKey(runId) });
+        },
+      },
+    );
   };
 
   // Pending permissions: permission.requested events with no matching approved/denied response
@@ -273,11 +308,11 @@ export default function RunDetail() {
     if (!isRunning) return [];
     const resolvedIds = new Set(
       allEvents
-        .filter(e => e.type === "permission.approved" || e.type === "permission.denied")
-        .map(e => extractPermId(e.payload))
-        .filter((id): id is string => !!id)
+        .filter((e) => e.type === "permission.approved" || e.type === "permission.denied")
+        .map((e) => extractPermId(e.payload))
+        .filter((id): id is string => !!id),
     );
-    return allEvents.filter(e => {
+    return allEvents.filter((e) => {
       if (e.type !== "permission.requested") return false;
       const permId = extractPermId(e.payload);
       return permId !== undefined && !resolvedIds.has(permId);
@@ -285,15 +320,25 @@ export default function RunDetail() {
   }, [allEvents, isRunning]);
 
   if (runLoading) {
-    return <div className="p-8 font-mono text-muted-foreground flex items-center justify-center min-h-[100dvh]">Loading...</div>;
+    return (
+      <div className="p-8 font-mono text-muted-foreground flex items-center justify-center min-h-[100dvh]">
+        Loading...
+      </div>
+    );
   }
 
   if (!run) {
-    return <div className="p-8 font-mono text-destructive flex items-center justify-center min-h-[100dvh]">Run not found.</div>;
+    return (
+      <div className="p-8 font-mono text-destructive flex items-center justify-center min-h-[100dvh]">
+        Run not found.
+      </div>
+    );
   }
 
   return (
-    <div className={`flex flex-col h-[100dvh] bg-background text-foreground overflow-hidden ${replay.isReplaying ? "ring-2 ring-inset ring-cyan-500/30" : ""}`}>
+    <div
+      className={`flex flex-col h-[100dvh] bg-background text-foreground overflow-hidden ${replay.isReplaying ? "ring-2 ring-inset ring-cyan-500/30" : ""}`}
+    >
       <header className="h-14 border-b border-border/50 bg-card/50 flex flex-shrink-0 items-center justify-between px-4">
         <div className="flex items-center gap-4">
           <Link href="/">
@@ -303,13 +348,21 @@ export default function RunDetail() {
           </Link>
           <div className="flex flex-col">
             <div className="flex items-center gap-2">
-              <span className="font-mono font-bold text-sm truncate max-w-[300px]" title={run.goal}>{run.goal}</span>
-              <Badge variant="outline" className={
-                run.status === 'completed' ? 'border-green-500/50 text-green-500' :
-                run.status === 'failed' ? 'border-red-500/50 text-red-500' :
-                run.status === 'running' ? 'border-blue-500/50 text-blue-500 animate-pulse' :
-                'border-muted-foreground/50 text-muted-foreground'
-              }>
+              <span className="font-mono font-bold text-sm truncate max-w-[300px]" title={run.goal}>
+                {run.goal}
+              </span>
+              <Badge
+                variant="outline"
+                className={
+                  run.status === "completed"
+                    ? "border-green-500/50 text-green-500"
+                    : run.status === "failed"
+                      ? "border-red-500/50 text-red-500"
+                      : run.status === "running"
+                        ? "border-blue-500/50 text-blue-500 animate-pulse"
+                        : "border-muted-foreground/50 text-muted-foreground"
+                }
+              >
                 {run.status}
               </Badge>
               {duration && (
@@ -318,11 +371,20 @@ export default function RunDetail() {
                   {duration}
                 </span>
               )}
-              {run.model === 'demo' && (
-                <Badge variant="secondary" className="bg-purple-500/10 text-purple-500 border-purple-500/20">DEMO</Badge>
+              {run.model === "demo" && (
+                <Badge
+                  variant="secondary"
+                  className="bg-purple-500/10 text-purple-500 border-purple-500/20"
+                >
+                  DEMO
+                </Badge>
               )}
               {getModelLabel(run.model) && (
-                <Badge variant="outline" className="font-mono text-[10px] px-1.5 py-0 border-blue-500/30 text-blue-400 bg-blue-500/5" title={run.model ?? undefined}>
+                <Badge
+                  variant="outline"
+                  className="font-mono text-[10px] px-1.5 py-0 border-blue-500/30 text-blue-400 bg-blue-500/5"
+                  title={run.model ?? undefined}
+                >
                   {getModelLabel(run.model)}
                 </Badge>
               )}
@@ -332,7 +394,12 @@ export default function RunDetail() {
         </div>
         <div className="flex items-center gap-2">
           {isRunning ? (
-            <Button variant="destructive" size="sm" onClick={handleCancel} disabled={cancelRun.isPending}>
+            <Button
+              variant="destructive"
+              size="sm"
+              onClick={handleCancel}
+              disabled={cancelRun.isPending}
+            >
               <Square className="h-4 w-4 mr-2" /> Cancel
             </Button>
           ) : (
@@ -343,7 +410,11 @@ export default function RunDetail() {
                   size="sm"
                   onClick={handleRunTests}
                   disabled={runTest.isPending || hasTests === false}
-                  title={hasTests === false ? "No test files found in this run's work directory" : "Run tests in this run's work directory"}
+                  title={
+                    hasTests === false
+                      ? "No test files found in this run's work directory"
+                      : "Run tests in this run's work directory"
+                  }
                 >
                   <TestTube className="h-4 w-4 mr-2" />
                   {runTest.isPending ? "Running…" : "Run Tests"}
@@ -351,23 +422,29 @@ export default function RunDetail() {
               )}
               {run.prUrl && (
                 <a href={run.prUrl} target="_blank" rel="noopener noreferrer">
-                  <Button variant="outline" size="sm" className={
-                    run.prStatus === "merged"
-                      ? "border-green-500/50 text-green-400 hover:text-green-300"
-                      : run.prStatus === "closed"
-                        ? "border-red-500/50 text-red-400 hover:text-red-300"
-                        : "border-violet-500/50 text-violet-400 hover:text-violet-300"
-                  }>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className={
+                      run.prStatus === "merged"
+                        ? "border-green-500/50 text-green-400 hover:text-green-300"
+                        : run.prStatus === "closed"
+                          ? "border-red-500/50 text-red-400 hover:text-red-300"
+                          : "border-violet-500/50 text-violet-400 hover:text-violet-300"
+                    }
+                  >
                     <GitPullRequest className="h-4 w-4 mr-2" />
                     View PR
                     {run.prStatus && (
-                      <span className={`ml-1.5 px-1.5 py-0.5 rounded text-[10px] font-medium leading-none ${
-                        run.prStatus === "merged"
-                          ? "bg-green-500/20 text-green-400"
-                          : run.prStatus === "closed"
-                            ? "bg-red-500/20 text-red-400"
-                            : "bg-violet-500/20 text-violet-400"
-                      }`}>
+                      <span
+                        className={`ml-1.5 px-1.5 py-0.5 rounded text-[10px] font-medium leading-none ${
+                          run.prStatus === "merged"
+                            ? "bg-green-500/20 text-green-400"
+                            : run.prStatus === "closed"
+                              ? "bg-red-500/20 text-red-400"
+                              : "bg-violet-500/20 text-violet-400"
+                        }`}
+                      >
                         {run.prStatus}
                       </span>
                     )}
@@ -388,21 +465,27 @@ export default function RunDetail() {
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="max-h-80 overflow-y-auto w-72">
-                  <DropdownMenuLabel className="font-mono text-xs">Compare with run</DropdownMenuLabel>
+                  <DropdownMenuLabel className="font-mono text-xs">
+                    Compare with run
+                  </DropdownMenuLabel>
                   <DropdownMenuSeparator />
-                  {(allRuns ?? []).filter(r => r.id !== runId).length === 0 ? (
-                    <DropdownMenuItem disabled className="font-mono text-xs">No other runs</DropdownMenuItem>
+                  {(allRuns ?? []).filter((r) => r.id !== runId).length === 0 ? (
+                    <DropdownMenuItem disabled className="font-mono text-xs">
+                      No other runs
+                    </DropdownMenuItem>
                   ) : (
                     (allRuns ?? [])
-                      .filter(r => r.id !== runId)
-                      .map(r => (
+                      .filter((r) => r.id !== runId)
+                      .map((r) => (
                         <DropdownMenuItem
                           key={r.id}
                           className="font-mono text-xs flex flex-col items-start gap-0.5"
                           onClick={() => setLocation(`/runs/${runId}/diff/${r.id}`)}
                         >
                           <span className="truncate w-full">{r.goal}</span>
-                          <span className="text-[10px] text-muted-foreground">{r.id.slice(0, 8)} · {r.status}</span>
+                          <span className="text-[10px] text-muted-foreground">
+                            {r.id.slice(0, 8)} · {r.status}
+                          </span>
                         </DropdownMenuItem>
                       ))
                   )}
@@ -425,6 +508,8 @@ export default function RunDetail() {
         />
       )}
 
+      <ApprovalBanner runId={runId} status={run?.status} />
+
       <div className="flex-1 overflow-hidden">
         <ResizablePanelGroup direction="vertical">
           <ResizablePanel defaultSize={70}>
@@ -435,14 +520,23 @@ export default function RunDetail() {
                   <div className="h-10 px-4 flex items-center border-b border-border/50 bg-muted/20 font-mono text-xs font-semibold text-muted-foreground uppercase tracking-wider">
                     Causal Graph
                   </div>
-                  <CausalGraph
-                    objects={replayObjects}
-                    relations={replayRelations}
-                    onNodeSelect={handleGraphNodeSelect}
-                  />
+                  <div className="flex-1 min-h-0 overflow-auto">
+                    <CausalGraph
+                      objects={replayObjects}
+                      relations={replayRelations}
+                      onNodeSelect={handleGraphNodeSelect}
+                    />
+                  </div>
+                  <div className="border-t border-border/50 max-h-[40%] overflow-auto bg-muted/10">
+                    <CausalChainPanel
+                      runId={runId}
+                      objectId={selectedNode?.id ?? null}
+                      objectLabel={selectedNode?.type}
+                    />
+                  </div>
                 </div>
               </ResizablePanel>
-              
+
               <ResizableHandle />
 
               {/* Center Panel: Conversation */}
@@ -453,11 +547,20 @@ export default function RunDetail() {
                   </div>
                   <ScrollArea className="flex-1 p-4">
                     <div className="flex flex-col gap-4">
-                      {displayEvents.filter(e => e.type === 'assistant.message.added' || e.type.startsWith('permission.') || e.type === 'test.run.completed').map(e => (
-                        <ConversationMessage key={e.id} event={e} onResolve={handlePerm} />
-                      ))}
+                      {displayEvents
+                        .filter(
+                          (e) =>
+                            e.type === "assistant.message.added" ||
+                            e.type.startsWith("permission.") ||
+                            e.type === "test.run.completed",
+                        )
+                        .map((e) => (
+                          <ConversationMessage key={e.id} event={e} onResolve={handlePerm} />
+                        ))}
                       {displayEvents.length === 0 && (
-                        <div className="text-center font-mono text-sm text-muted-foreground mt-10">No messages yet</div>
+                        <div className="text-center font-mono text-sm text-muted-foreground mt-10">
+                          No messages yet
+                        </div>
                       )}
                     </div>
                   </ScrollArea>
@@ -475,7 +578,6 @@ export default function RunDetail() {
                   onExternalSelectFile={setSelectedFile}
                 />
               </ResizablePanel>
-
             </ResizablePanelGroup>
           </ResizablePanel>
 
@@ -486,9 +588,7 @@ export default function RunDetail() {
             <div className="h-full flex flex-col bg-black dark:bg-black">
               <div className="h-8 px-4 flex items-center border-b border-white/10 font-mono text-xs text-white/50 bg-white/5 uppercase tracking-wider">
                 Event Stream
-                {replay.isReplaying && (
-                  <span className="ml-2 text-cyan-400">— Replay</span>
-                )}
+                {replay.isReplaying && <span className="ml-2 text-cyan-400">— Replay</span>}
               </div>
               <div ref={scrollRef} className="flex-1 overflow-y-auto p-2 font-mono text-xs">
                 {displayEvents.map((e, i) => (
@@ -510,16 +610,11 @@ export default function RunDetail() {
 
       {/* Replay toolbar — shown for terminal runs */}
       {isTerminal && allEvents.length > 0 && (
-        <ReplayToolbar
-          replay={replay}
-          totalEvents={allEvents.length}
-        />
+        <ReplayToolbar replay={replay} totalEvents={allEvents.length} />
       )}
     </div>
   );
 }
-
-
 
 function PermissionBanner({
   permissions,
@@ -532,7 +627,8 @@ function PermissionBanner({
 }) {
   const current = permissions[0]!;
   const permId = extractPermId(current.payload) ?? "";
-  const description: string = strField(current.payload?.description) || "Agent requested permission to proceed.";
+  const description: string =
+    strField(current.payload?.description) || "Agent requested permission to proceed.";
   const queueSize = permissions.length;
 
   return (
@@ -544,7 +640,10 @@ function PermissionBanner({
             Agent is waiting for your approval
           </span>
           {queueSize > 1 && (
-            <Badge variant="outline" className="border-red-500/40 text-red-400 font-mono text-[10px] px-1.5 py-0">
+            <Badge
+              variant="outline"
+              className="border-red-500/40 text-red-400 font-mono text-[10px] px-1.5 py-0"
+            >
               1 of {queueSize}
             </Badge>
           )}
@@ -574,8 +673,14 @@ function PermissionBanner({
   );
 }
 
-function ConversationMessage({ event, onResolve }: { event: AgentEvent, onResolve: (eventId: string, permId: string, d: PermissionDecisionDecision) => void }) {
-  if (event.type === 'assistant.message.added') {
+function ConversationMessage({
+  event,
+  onResolve,
+}: {
+  event: AgentEvent;
+  onResolve: (eventId: string, permId: string, d: PermissionDecisionDecision) => void;
+}) {
+  if (event.type === "assistant.message.added") {
     const p = event.payload;
     return (
       <div className="flex flex-col items-start gap-1 max-w-[85%]">
@@ -586,8 +691,8 @@ function ConversationMessage({ event, onResolve }: { event: AgentEvent, onResolv
       </div>
     );
   }
-  
-  if (event.type === 'permission.requested') {
+
+  if (event.type === "permission.requested") {
     const permId = extractPermId(event.payload) ?? "";
     return (
       <Card className="border-red-500/30 bg-red-500/5 p-4 flex flex-col gap-3">
@@ -595,12 +700,23 @@ function ConversationMessage({ event, onResolve }: { event: AgentEvent, onResolv
           <ShieldAlert className="h-4 w-4" />
           <span className="font-mono text-sm font-semibold">Permission Required</span>
         </div>
-        <p className="text-sm font-mono text-muted-foreground">{strField(event.payload?.description) || 'Agent requested permission to proceed.'}</p>
+        <p className="text-sm font-mono text-muted-foreground">
+          {strField(event.payload?.description) || "Agent requested permission to proceed."}
+        </p>
         <div className="flex items-center gap-2 mt-2">
-          <Button size="sm" variant="outline" className="border-red-500/30 text-red-500 hover:bg-red-500/10" onClick={() => onResolve(event.id, permId, 'deny')}>
+          <Button
+            size="sm"
+            variant="outline"
+            className="border-red-500/30 text-red-500 hover:bg-red-500/10"
+            onClick={() => onResolve(event.id, permId, "deny")}
+          >
             Deny
           </Button>
-          <Button size="sm" className="bg-red-500 hover:bg-red-600 text-white" onClick={() => onResolve(event.id, permId, 'approve')}>
+          <Button
+            size="sm"
+            className="bg-red-500 hover:bg-red-600 text-white"
+            onClick={() => onResolve(event.id, permId, "approve")}
+          >
             Approve
           </Button>
         </div>
@@ -608,23 +724,27 @@ function ConversationMessage({ event, onResolve }: { event: AgentEvent, onResolv
     );
   }
 
-  if (event.type === 'permission.approved') {
+  if (event.type === "permission.approved") {
     return (
       <div className="flex justify-center my-2">
-        <Badge variant="outline" className="border-green-500/30 text-green-500 bg-green-500/5">Permission Approved</Badge>
+        <Badge variant="outline" className="border-green-500/30 text-green-500 bg-green-500/5">
+          Permission Approved
+        </Badge>
       </div>
     );
   }
 
-  if (event.type === 'permission.denied') {
+  if (event.type === "permission.denied") {
     return (
       <div className="flex justify-center my-2">
-        <Badge variant="outline" className="border-red-500/30 text-red-500 bg-red-500/5">Permission Denied</Badge>
+        <Badge variant="outline" className="border-red-500/30 text-red-500 bg-red-500/5">
+          Permission Denied
+        </Badge>
       </div>
     );
   }
 
-  if (event.type === 'test.run.completed') {
+  if (event.type === "test.run.completed") {
     return <TestResultCard event={event} />;
   }
 
@@ -637,21 +757,27 @@ function TestResultCard({ event }: { event: AgentEvent }) {
   const status = strField(p?.status) ?? "unknown";
   const passed = numField(p?.passed) ?? 0;
   const failed = numField(p?.failed) ?? 0;
-  const total = numField(p?.total) ?? (passed + failed);
+  const total = numField(p?.total) ?? passed + failed;
   const output = strField(p?.output) ?? "";
   const triggeredBy = strField(p?.triggered_by);
   const isPassed = status === "passed";
 
   return (
-    <Card className={`p-4 flex flex-col gap-3 border ${isPassed ? "border-green-500/30 bg-green-500/5" : "border-red-500/30 bg-red-500/5"}`}>
+    <Card
+      className={`p-4 flex flex-col gap-3 border ${isPassed ? "border-green-500/30 bg-green-500/5" : "border-red-500/30 bg-red-500/5"}`}
+    >
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <TestTube className={`h-4 w-4 ${isPassed ? "text-green-500" : "text-red-500"}`} />
-          <span className={`font-mono text-sm font-semibold ${isPassed ? "text-green-500" : "text-red-500"}`}>
+          <span
+            className={`font-mono text-sm font-semibold ${isPassed ? "text-green-500" : "text-red-500"}`}
+          >
             Tests {isPassed ? "Passed" : "Failed"}
           </span>
           {triggeredBy === "user" && (
-            <Badge variant="secondary" className="text-[10px] px-1 py-0">manual</Badge>
+            <Badge variant="secondary" className="text-[10px] px-1 py-0">
+              manual
+            </Badge>
           )}
         </div>
         <div className="flex items-center gap-3 font-mono text-xs text-muted-foreground">
@@ -664,7 +790,7 @@ function TestResultCard({ event }: { event: AgentEvent }) {
         <div>
           <button
             className="flex items-center gap-1 font-mono text-xs text-muted-foreground hover:text-foreground transition-colors"
-            onClick={() => setExpanded(e => !e)}
+            onClick={() => setExpanded((e) => !e)}
           >
             {expanded ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
             {expanded ? "Hide output" : "Show output"}
@@ -707,18 +833,18 @@ function FileBrowserPanel({
   }, [externalSelectedFile, onExternalSelectFile]);
 
   const { data: files } = useListRunFiles(runId, {
-    query: queryConfig({ refetchInterval: 5000 })
+    query: queryConfig({ refetchInterval: 5000 }),
   });
 
   const { data: fileContent, isLoading: contentLoading } = useGetRunFileContent(
     runId,
     { path: selectedFile ?? "" },
-    { query: queryConfig({ enabled: !!selectedFile && activeTab === "content" }) }
+    { query: queryConfig({ enabled: !!selectedFile && activeTab === "content" }) },
   );
 
   const agentWrittenPaths = useMemo(() => {
     const paths = new Set<string>();
-    allEvents.forEach(e => {
+    allEvents.forEach((e) => {
       if (e.type === "patch.applied" || e.type === "file.write" || e.type === "file.created") {
         const p = strField(e.payload?.path) ?? strField(e.payload?.file);
         if (p) paths.add(p);
@@ -731,8 +857,8 @@ function FileBrowserPanel({
   const patchHistoryForFile = useMemo(() => {
     if (!selectedFile) return [];
     return allEvents
-      .filter(e => e.type === "patch.applied" && e.payload?.path === selectedFile)
-      .map(e => {
+      .filter((e) => e.type === "patch.applied" && e.payload?.path === selectedFile)
+      .map((e) => {
         const localId = strField(e.payload?.patch_id) ?? "";
         return {
           eventId: e.id,
@@ -753,20 +879,20 @@ function FileBrowserPanel({
   const { data: patchDetail, isLoading: patchLoading } = useGetRunPatch(
     runId,
     activePatchId ?? "",
-    { query: queryConfig({ enabled: !!(activePatchId && activeTab === "diff") }) }
+    { query: queryConfig({ enabled: !!(activePatchId && activeTab === "diff") }) },
   );
 
   const flatFiles = useMemo(() => {
     if (!files) return [];
     function flatten(entries: FileEntry[]): FileEntry[] {
-      return entries.flatMap(e => e.type === "file" ? [e] : flatten(e.children ?? []));
+      return entries.flatMap((e) => (e.type === "file" ? [e] : flatten(e.children ?? [])));
     }
     return flatten(files);
   }, [files]);
 
   const writtenFileCount = useMemo(() => {
     if (!agentWrittenPaths.size) return 0;
-    return flatFiles.filter(f => agentWrittenPaths.has(f.path)).length;
+    return flatFiles.filter((f) => agentWrittenPaths.has(f.path)).length;
   }, [flatFiles, agentWrittenPaths]);
 
   const hasPatch = !!patchIdForFile;
@@ -782,7 +908,10 @@ function FileBrowserPanel({
         {selectedFile ? (
           <button
             className="flex items-center gap-1 hover:text-foreground transition-colors"
-            onClick={() => { setSelectedFile(null); setActiveTab("content"); }}
+            onClick={() => {
+              setSelectedFile(null);
+              setActiveTab("content");
+            }}
           >
             <ArrowLeft className="h-3 w-3" />
             Files
@@ -805,8 +934,7 @@ function FileBrowserPanel({
             <span className="truncate flex-1">{selectedFile}</span>
             {patchDetail && (
               <span className="shrink-0 text-[9px] font-mono">
-                <span className="text-green-500">+{patchDetail.lines_added}</span>
-                {" "}
+                <span className="text-green-500">+{patchDetail.lines_added}</span>{" "}
                 <span className="text-red-500">-{patchDetail.lines_removed}</span>
               </span>
             )}
@@ -832,7 +960,10 @@ function FileBrowserPanel({
                 >
                   <History className="h-3 w-3" />
                   History
-                  <Badge variant="secondary" className="ml-1 font-mono text-[9px] px-1 py-0 h-3.5 leading-none">
+                  <Badge
+                    variant="secondary"
+                    className="ml-1 font-mono text-[9px] px-1 py-0 h-3.5 leading-none"
+                  >
                     {patchHistoryForFile.length}
                   </Badge>
                 </button>
@@ -841,10 +972,14 @@ function FileBrowserPanel({
                 <div className="ml-auto pr-2">
                   <button
                     className="flex items-center gap-1 px-2 py-0.5 rounded font-mono text-[10px] text-muted-foreground hover:text-foreground hover:bg-muted/40 transition-colors"
-                    onClick={() => setDiffMode(m => m === "unified" ? "split" : "unified")}
+                    onClick={() => setDiffMode((m) => (m === "unified" ? "split" : "unified"))}
                     title={diffMode === "unified" ? "Switch to side-by-side" : "Switch to unified"}
                   >
-                    {diffMode === "unified" ? <Columns2 className="h-3 w-3" /> : <AlignLeft className="h-3 w-3" />}
+                    {diffMode === "unified" ? (
+                      <Columns2 className="h-3 w-3" />
+                    ) : (
+                      <AlignLeft className="h-3 w-3" />
+                    )}
                     {diffMode === "unified" ? "Split" : "Unified"}
                   </button>
                 </div>
@@ -858,7 +993,9 @@ function FileBrowserPanel({
               ) : fileContent ? (
                 <CodeBlock code={fileContent.content} path={selectedFile} />
               ) : (
-                <div className="p-4 font-mono text-xs text-muted-foreground">Could not load file.</div>
+                <div className="p-4 font-mono text-xs text-muted-foreground">
+                  Could not load file.
+                </div>
               )
             ) : activeTab === "diff" ? (
               patchLoading ? (
@@ -870,27 +1007,37 @@ function FileBrowserPanel({
                   <UnifiedDiffView diff={patchDetail.diff} />
                 )
               ) : (
-                <div className="p-4 font-mono text-xs text-muted-foreground">No diff available.</div>
+                <div className="p-4 font-mono text-xs text-muted-foreground">
+                  No diff available.
+                </div>
               )
             ) : (
               <div className="p-2 flex flex-col gap-1">
-                {patchHistoryForFile.slice().reverse().map((p, idx) => {
-                  const revNum = patchHistoryForFile.length - idx;
-                  const isActive = activePatchId === p.scopedId;
-                  const d = new Date(p.createdAt);
-                  const t = `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}:${d.getSeconds().toString().padStart(2, '0')}`;
-                  return (
-                    <button
-                      key={p.eventId}
-                      onClick={() => { setSelectedPatchId(p.scopedId); setActiveTab("diff"); }}
-                      className={`flex items-center gap-2 px-3 py-2 rounded font-mono text-[11px] text-left transition-colors ${isActive ? "bg-foreground/10 text-foreground" : "text-muted-foreground hover:bg-muted/40 hover:text-foreground"}`}
-                    >
-                      <span className="text-green-500 shrink-0">rev {revNum}</span>
-                      <span className="text-muted-foreground/70 shrink-0">{t}</span>
-                      <span className="truncate text-[10px] text-muted-foreground/50">{p.scopedId}</span>
-                    </button>
-                  );
-                })}
+                {patchHistoryForFile
+                  .slice()
+                  .reverse()
+                  .map((p, idx) => {
+                    const revNum = patchHistoryForFile.length - idx;
+                    const isActive = activePatchId === p.scopedId;
+                    const d = new Date(p.createdAt);
+                    const t = `${d.getHours().toString().padStart(2, "0")}:${d.getMinutes().toString().padStart(2, "0")}:${d.getSeconds().toString().padStart(2, "0")}`;
+                    return (
+                      <button
+                        key={p.eventId}
+                        onClick={() => {
+                          setSelectedPatchId(p.scopedId);
+                          setActiveTab("diff");
+                        }}
+                        className={`flex items-center gap-2 px-3 py-2 rounded font-mono text-[11px] text-left transition-colors ${isActive ? "bg-foreground/10 text-foreground" : "text-muted-foreground hover:bg-muted/40 hover:text-foreground"}`}
+                      >
+                        <span className="text-green-500 shrink-0">rev {revNum}</span>
+                        <span className="text-muted-foreground/70 shrink-0">{t}</span>
+                        <span className="truncate text-[10px] text-muted-foreground/50">
+                          {p.scopedId}
+                        </span>
+                      </button>
+                    );
+                  })}
               </div>
             )}
           </ScrollArea>
@@ -986,7 +1133,9 @@ function FileTreeItems({
               onClick={() => onSelect(entry.path)}
             >
               <FileText className="h-3 w-3 text-muted-foreground shrink-0" />
-              <span className="truncate flex-1 group-hover:text-foreground transition-colors">{entry.name}</span>
+              <span className="truncate flex-1 group-hover:text-foreground transition-colors">
+                {entry.name}
+              </span>
               {agentWrittenPaths.has(entry.path) && (
                 <span className="shrink-0 text-[9px] font-bold text-green-500 bg-green-500/10 px-1 rounded">
                   NEW
@@ -1007,7 +1156,17 @@ function ReplayToolbar({
   replay: ReturnType<typeof useReplay>;
   totalEvents: number;
 }) {
-  const { isReplaying, replayIndex, isPlaying, enterReplay, exitReplay, stepPrev, stepNext, stepTo, togglePlay } = replay;
+  const {
+    isReplaying,
+    replayIndex,
+    isPlaying,
+    enterReplay,
+    exitReplay,
+    stepPrev,
+    stepNext,
+    stepTo,
+    togglePlay,
+  } = replay;
 
   if (!isReplaying) {
     return (
@@ -1035,61 +1194,61 @@ function ReplayToolbar({
         className="h-1 rounded-none bg-cyan-500/10 [&>div]:bg-cyan-400"
       />
       <div className="h-12 flex items-center px-4 gap-3">
-      <Button
-        variant="ghost"
-        size="sm"
-        className="h-7 text-xs font-mono text-cyan-400 hover:text-cyan-300 hover:bg-cyan-500/10 gap-1 px-2"
-        onClick={exitReplay}
-      >
-        Exit Replay
-      </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-7 text-xs font-mono text-cyan-400 hover:text-cyan-300 hover:bg-cyan-500/10 gap-1 px-2"
+          onClick={exitReplay}
+        >
+          Exit Replay
+        </Button>
 
-      <div className="h-4 w-px bg-border/50" />
+        <div className="h-4 w-px bg-border/50" />
 
-      <Button
-        variant="ghost"
-        size="icon"
-        className="h-7 w-7 text-muted-foreground hover:text-foreground"
-        onClick={stepPrev}
-        disabled={replayIndex === 0}
-        title="Previous event"
-      >
-        <SkipBack className="h-3.5 w-3.5" />
-      </Button>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-7 w-7 text-muted-foreground hover:text-foreground"
+          onClick={stepPrev}
+          disabled={replayIndex === 0}
+          title="Previous event"
+        >
+          <SkipBack className="h-3.5 w-3.5" />
+        </Button>
 
-      <Button
-        variant="ghost"
-        size="icon"
-        className="h-7 w-7 text-foreground"
-        onClick={togglePlay}
-        title={isPlaying ? "Pause" : "Play"}
-      >
-        {isPlaying ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
-      </Button>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-7 w-7 text-foreground"
+          onClick={togglePlay}
+          title={isPlaying ? "Pause" : "Play"}
+        >
+          {isPlaying ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
+        </Button>
 
-      <Button
-        variant="ghost"
-        size="icon"
-        className="h-7 w-7 text-muted-foreground hover:text-foreground"
-        onClick={stepNext}
-        disabled={replayIndex >= totalEvents - 1}
-        title="Next event"
-      >
-        <ChevronRight className="h-3.5 w-3.5" />
-      </Button>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-7 w-7 text-muted-foreground hover:text-foreground"
+          onClick={stepNext}
+          disabled={replayIndex >= totalEvents - 1}
+          title="Next event"
+        >
+          <ChevronRight className="h-3.5 w-3.5" />
+        </Button>
 
-      <span className="font-mono text-xs text-cyan-400 w-28 shrink-0 text-center">
-        Event {replayIndex + 1} / {totalEvents}
-      </span>
+        <span className="font-mono text-xs text-cyan-400 w-28 shrink-0 text-center">
+          Event {replayIndex + 1} / {totalEvents}
+        </span>
 
-      <Slider
-        min={0}
-        max={totalEvents - 1}
-        step={1}
-        value={[replayIndex]}
-        onValueChange={([v]) => stepTo(v!)}
-        className="flex-1 max-w-xs"
-      />
+        <Slider
+          min={0}
+          max={totalEvents - 1}
+          step={1}
+          value={[replayIndex]}
+          onValueChange={([v]) => stepTo(v!)}
+          className="flex-1 max-w-xs"
+        />
       </div>
     </div>
   );
@@ -1119,19 +1278,21 @@ function EventStreamRow({
   onSeek?: () => void;
 }) {
   const type = event.type;
-  
+
   let colorClass = "text-white/60";
-  if (type.startsWith('llm.')) colorClass = "text-purple-400";
-  else if (type.startsWith('tool.') || type.startsWith('bash.')) colorClass = "text-amber-400";
-  else if (type.startsWith('patch.')) colorClass = "text-green-400";
-  else if (type.startsWith('test.')) colorClass = "text-blue-400";
-  else if (type.startsWith('permission.')) colorClass = "text-red-400";
-  else if (type.startsWith('task.')) colorClass = "text-slate-400";
+  if (type.startsWith("llm.")) colorClass = "text-purple-400";
+  else if (type.startsWith("tool.") || type.startsWith("bash.")) colorClass = "text-amber-400";
+  else if (type.startsWith("patch.")) colorClass = "text-green-400";
+  else if (type.startsWith("test.")) colorClass = "text-blue-400";
+  else if (type.startsWith("permission.")) colorClass = "text-red-400";
+  else if (type.startsWith("task.")) colorClass = "text-slate-400";
 
   const date = new Date(event.createdAt);
-  const timeStr = `${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}:${date.getSeconds().toString().padStart(2, '0')}.${date.getMilliseconds().toString().padStart(3, '0')}`;
+  const timeStr = `${date.getHours().toString().padStart(2, "0")}:${date.getMinutes().toString().padStart(2, "0")}:${date.getSeconds().toString().padStart(2, "0")}.${date.getMilliseconds().toString().padStart(3, "0")}`;
 
-  const deltaMs = prevCreatedAt ? Math.max(0, date.getTime() - new Date(prevCreatedAt).getTime()) : null;
+  const deltaMs = prevCreatedAt
+    ? Math.max(0, date.getTime() - new Date(prevCreatedAt).getTime())
+    : null;
 
   return (
     <div
@@ -1147,13 +1308,14 @@ function EventStreamRow({
       }`}
     >
       <span className="text-white/30 shrink-0 w-[100px]">{timeStr}</span>
-      <span className="text-white/25 shrink-0 w-[52px] text-right tabular-nums" title={deltaMs !== null ? "Time since previous event" : undefined}>
+      <span
+        className="text-white/25 shrink-0 w-[52px] text-right tabular-nums"
+        title={deltaMs !== null ? "Time since previous event" : undefined}
+      >
         {deltaMs !== null ? formatDelta(deltaMs) : ""}
       </span>
       <span className={`shrink-0 w-[180px] font-semibold ${colorClass}`}>{event.type}</span>
-      <span className="text-white/40 truncate">
-        {JSON.stringify(event.payload || {})}
-      </span>
+      <span className="text-white/40 truncate">{JSON.stringify(event.payload || {})}</span>
     </div>
   );
 }

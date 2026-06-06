@@ -1,13 +1,40 @@
-import { useListRuns, useGetRunStats, useCreateRun, getListRunsQueryKey, getGetRunStatsQueryKey } from "@workspace/api-client-react";
+import {
+  useListRuns,
+  useGetRunStats,
+  useCreateRun,
+  getListRunsQueryKey,
+  getGetRunStatsQueryKey,
+} from "@workspace/api-client-react";
 import type { Run } from "@workspace/api-client-react";
 import { useLocation } from "wouter";
-import { Activity, Play, FileTerminal, Network, CheckCircle, XCircle, Github, GitPullRequest, ChevronDown, Search, X, Clock, Bot, GitCompareArrows } from "lucide-react";
+import {
+  Activity,
+  Play,
+  FileTerminal,
+  Network,
+  CheckCircle,
+  XCircle,
+  Github,
+  GitPullRequest,
+  ChevronDown,
+  Search,
+  X,
+  Clock,
+  Bot,
+  GitCompareArrows,
+} from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { RepoCombobox } from "@/components/RepoCombobox";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useState, useMemo, useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -50,7 +77,11 @@ function RunCard({
         {selectable && (
           <div
             className="pr-3 flex items-center"
-            onClick={(e) => { e.preventDefault(); e.stopPropagation(); onToggleSelect?.(run.id); }}
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              onToggleSelect?.(run.id);
+            }}
           >
             <Checkbox checked={selected} aria-label={`Select run ${run.id}`} />
           </div>
@@ -59,7 +90,10 @@ function RunCard({
           <div className="flex items-center gap-2">
             <span className="font-mono text-sm font-medium truncate">{run.goal}</span>
             {modelLabel && (
-              <Badge variant="outline" className="shrink-0 font-mono text-[10px] px-1.5 py-0 border-blue-500/30 text-blue-400 bg-blue-500/5">
+              <Badge
+                variant="outline"
+                className="shrink-0 font-mono text-[10px] px-1.5 py-0 border-blue-500/30 text-blue-400 bg-blue-500/5"
+              >
                 {modelLabel}
               </Badge>
             )}
@@ -103,24 +137,32 @@ function RunCard({
               <GitPullRequest className="w-3.5 h-3.5" />
               PR
               {run.prStatus && (
-                <span className={`px-1 py-0.5 rounded text-[10px] font-medium leading-none ${
-                  run.prStatus === "merged"
-                    ? "bg-green-500/20 text-green-400"
-                    : run.prStatus === "closed"
-                      ? "bg-red-500/20 text-red-400"
-                      : "bg-violet-500/20 text-violet-400"
-                }`}>
+                <span
+                  className={`px-1 py-0.5 rounded text-[10px] font-medium leading-none ${
+                    run.prStatus === "merged"
+                      ? "bg-green-500/20 text-green-400"
+                      : run.prStatus === "closed"
+                        ? "bg-red-500/20 text-red-400"
+                        : "bg-violet-500/20 text-violet-400"
+                  }`}
+                >
                   {run.prStatus}
                 </span>
               )}
             </a>
           )}
-          <Badge variant="outline" className={
-            run.status === 'completed' ? 'border-green-500/50 text-green-500' :
-            run.status === 'failed' ? 'border-red-500/50 text-red-500' :
-            run.status === 'running' ? 'border-blue-500/50 text-blue-500' :
-            'border-muted-foreground/50 text-muted-foreground'
-          }>
+          <Badge
+            variant="outline"
+            className={
+              run.status === "completed"
+                ? "border-green-500/50 text-green-500"
+                : run.status === "failed"
+                  ? "border-red-500/50 text-red-500"
+                  : run.status === "running"
+                    ? "border-blue-500/50 text-blue-500"
+                    : "border-muted-foreground/50 text-muted-foreground"
+            }
+          >
             {run.status}
           </Badge>
         </div>
@@ -134,11 +176,12 @@ export default function Dashboard() {
   const queryClient = useQueryClient();
   const { data: runs, isLoading: runsLoading } = useListRuns();
   const { data: stats } = useGetRunStats();
-  
+
   const createRun = useCreateRun();
   const [goal, setGoal] = useState("");
   const [repoUrl, setRepoUrl] = useState("");
   const [showRepoField, setShowRepoField] = useState(false);
+  const [requireApproval, setRequireApproval] = useState(false);
   const [selectedModel, setSelectedModel] = useState<string>(() => {
     if (typeof window === "undefined") return "default";
     return window.localStorage.getItem(PREFERRED_MODEL_KEY) ?? "default";
@@ -158,8 +201,8 @@ export default function Dashboard() {
   }, [selectedModel]);
 
   const toggleCompareSelect = (id: string) => {
-    setSelectedForCompare(prev => {
-      if (prev.includes(id)) return prev.filter(x => x !== id);
+    setSelectedForCompare((prev) => {
+      if (prev.includes(id)) return prev.filter((x) => x !== id);
       if (prev.length >= 2) return [prev[1]!, id];
       return [...prev, id];
     });
@@ -179,7 +222,7 @@ export default function Dashboard() {
   const filteredRuns = useMemo(() => {
     if (!runs) return [];
     const q = searchQuery.trim().toLowerCase();
-    return runs.filter(run => {
+    return runs.filter((run) => {
       const matchesSearch =
         !q ||
         run.goal.toLowerCase().includes(q) ||
@@ -203,19 +246,23 @@ export default function Dashboard() {
   const handleStartRun = (e: React.FormEvent) => {
     e.preventDefault();
     if (!goal.trim()) return;
-    createRun.mutate({
-      data: {
-        goal,
-        repoUrl: repoUrl.trim() || null,
-        model: selectedModel === "default" ? null : selectedModel,
-      }
-    }, {
-      onSuccess: (newRun) => {
-        queryClient.invalidateQueries({ queryKey: getListRunsQueryKey() });
-        queryClient.invalidateQueries({ queryKey: getGetRunStatsQueryKey() });
-        setLocation(`/runs/${newRun.id}`);
-      }
-    });
+    createRun.mutate(
+      {
+        data: {
+          goal,
+          repoUrl: repoUrl.trim() || null,
+          model: selectedModel === "default" ? null : selectedModel,
+          requireApproval,
+        },
+      },
+      {
+        onSuccess: (newRun) => {
+          queryClient.invalidateQueries({ queryKey: getListRunsQueryKey() });
+          queryClient.invalidateQueries({ queryKey: getGetRunStatsQueryKey() });
+          setLocation(`/runs/${newRun.id}`);
+        },
+      },
+    );
   };
 
   return (
@@ -228,32 +275,31 @@ export default function Dashboard() {
       </header>
 
       <main className="flex-1 p-6 lg:p-12 max-w-6xl mx-auto w-full flex flex-col gap-8">
-        
         {/* Stats Row */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           <Card className="p-4 flex flex-col gap-1 border-border/50 bg-card/50">
             <span className="text-sm text-muted-foreground font-mono">Total Runs</span>
-            <span className="text-2xl font-bold font-mono">{stats?.totalRuns ?? '-'}</span>
+            <span className="text-2xl font-bold font-mono">{stats?.totalRuns ?? "-"}</span>
           </Card>
           <Card className="p-4 flex flex-col gap-1 border-border/50 bg-card/50">
             <span className="text-sm text-muted-foreground font-mono">Active</span>
             <div className="flex items-center gap-2">
               <Activity className="w-4 h-4 text-blue-500" />
-              <span className="text-2xl font-bold font-mono">{stats?.activeRuns ?? '-'}</span>
+              <span className="text-2xl font-bold font-mono">{stats?.activeRuns ?? "-"}</span>
             </div>
           </Card>
           <Card className="p-4 flex flex-col gap-1 border-border/50 bg-card/50">
             <span className="text-sm text-muted-foreground font-mono">Completed</span>
             <div className="flex items-center gap-2">
               <CheckCircle className="w-4 h-4 text-green-500" />
-              <span className="text-2xl font-bold font-mono">{stats?.completedRuns ?? '-'}</span>
+              <span className="text-2xl font-bold font-mono">{stats?.completedRuns ?? "-"}</span>
             </div>
           </Card>
           <Card className="p-4 flex flex-col gap-1 border-border/50 bg-card/50">
             <span className="text-sm text-muted-foreground font-mono">Failed</span>
             <div className="flex items-center gap-2">
               <XCircle className="w-4 h-4 text-red-500" />
-              <span className="text-2xl font-bold font-mono">{stats?.failedRuns ?? '-'}</span>
+              <span className="text-2xl font-bold font-mono">{stats?.failedRuns ?? "-"}</span>
             </div>
           </Card>
         </div>
@@ -266,28 +312,51 @@ export default function Dashboard() {
           </h2>
           <form onSubmit={handleStartRun} className="flex flex-col gap-3">
             <div className="flex gap-3">
-              <Input 
+              <Input
                 value={goal}
                 onChange={(e) => setGoal(e.target.value)}
                 placeholder="Describe what the agent should build or fix..."
                 className="flex-1 font-mono bg-background"
                 disabled={createRun.isPending}
               />
-              <Button type="submit" disabled={createRun.isPending || !goal.trim()} className="min-w-[120px]">
-                {createRun.isPending ? "Starting..." : <><Play className="w-4 h-4 mr-2" /> Start Run</>}
+              <Button
+                type="submit"
+                disabled={createRun.isPending || !goal.trim()}
+                className="min-w-[120px]"
+              >
+                {createRun.isPending ? (
+                  "Starting..."
+                ) : (
+                  <>
+                    <Play className="w-4 h-4 mr-2" /> Start Run
+                  </>
+                )}
               </Button>
             </div>
+
+            {/* Human-in-the-loop: pause before committing changes */}
+            <label className="flex items-center gap-2 text-xs text-muted-foreground select-none cursor-pointer">
+              <Checkbox
+                checked={requireApproval}
+                onCheckedChange={(c) => setRequireApproval(c === true)}
+                disabled={createRun.isPending}
+                aria-label="Require approval before committing"
+              />
+              Require my approval before the agent commits its changes
+            </label>
 
             {/* GitHub repo URL toggle */}
             <div className="flex flex-col gap-2">
               <button
                 type="button"
-                onClick={() => setShowRepoField(v => !v)}
+                onClick={() => setShowRepoField((v) => !v)}
                 className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors w-fit"
               >
                 <Github className="w-3.5 h-3.5" />
                 <span>GitHub repo (optional)</span>
-                <ChevronDown className={`w-3 h-3 transition-transform ${showRepoField ? "rotate-180" : ""}`} />
+                <ChevronDown
+                  className={`w-3 h-3 transition-transform ${showRepoField ? "rotate-180" : ""}`}
+                />
               </button>
               {showRepoField && (
                 <div className="flex flex-col gap-1">
@@ -297,7 +366,8 @@ export default function Dashboard() {
                     disabled={createRun.isPending}
                   />
                   <p className="text-[11px] text-muted-foreground">
-                    Agent will clone this repo, make changes on a new branch, and open a PR when done.
+                    Agent will clone this repo, make changes on a new branch, and open a PR when
+                    done.
                   </p>
                 </div>
               )}
@@ -307,14 +377,19 @@ export default function Dashboard() {
             <div className="flex flex-col gap-2">
               <button
                 type="button"
-                onClick={() => setShowModelField(v => !v)}
+                onClick={() => setShowModelField((v) => !v)}
                 className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors w-fit"
               >
                 <Bot className="w-3.5 h-3.5" />
                 <span>
-                  Model{selectedModel !== "default" ? `: ${MODEL_OPTIONS.find(o => o.value === selectedModel)?.label ?? selectedModel}` : " (optional)"}
+                  Model
+                  {selectedModel !== "default"
+                    ? `: ${MODEL_OPTIONS.find((o) => o.value === selectedModel)?.label ?? selectedModel}`
+                    : " (optional)"}
                 </span>
-                <ChevronDown className={`w-3 h-3 transition-transform ${showModelField ? "rotate-180" : ""}`} />
+                <ChevronDown
+                  className={`w-3 h-3 transition-transform ${showModelField ? "rotate-180" : ""}`}
+                />
               </button>
               {showModelField && (
                 <div className="flex flex-col gap-1">
@@ -327,7 +402,7 @@ export default function Dashboard() {
                       <SelectValue placeholder="Default" />
                     </SelectTrigger>
                     <SelectContent>
-                      {MODEL_OPTIONS.map(opt => (
+                      {MODEL_OPTIONS.map((opt) => (
                         <SelectItem key={opt.value} value={opt.value} className="font-mono text-xs">
                           {opt.label}
                         </SelectItem>
@@ -396,7 +471,7 @@ export default function Dashboard() {
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
               <Input
                 value={searchQuery}
-                onChange={e => setSearchQuery(e.target.value)}
+                onChange={(e) => setSearchQuery(e.target.value)}
                 placeholder="Search by goal or repo…"
                 className="pl-8 pr-8 font-mono text-sm bg-background"
               />
@@ -411,7 +486,7 @@ export default function Dashboard() {
               )}
             </div>
             <div className="flex items-center gap-1.5">
-              {(["all", "active", "completed", "failed"] as StatusFilter[]).map(s => (
+              {(["all", "active", "completed", "failed"] as StatusFilter[]).map((s) => (
                 <button
                   key={s}
                   onClick={() => setStatusFilter(s)}
@@ -449,7 +524,10 @@ export default function Dashboard() {
             ) : filteredRuns.length === 0 ? (
               <div className="text-sm text-muted-foreground font-mono py-4 text-center">
                 No runs match your filter.{" "}
-                <button onClick={handleClearFilters} className="underline underline-offset-2 hover:text-foreground transition-colors">
+                <button
+                  onClick={handleClearFilters}
+                  className="underline underline-offset-2 hover:text-foreground transition-colors"
+                >
                   Clear filters
                 </button>
               </div>
@@ -466,9 +544,7 @@ export default function Dashboard() {
             )}
           </div>
         </div>
-
       </main>
     </div>
   );
 }
-

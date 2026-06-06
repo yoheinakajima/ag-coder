@@ -21,7 +21,7 @@ A web-based coding agent UI where every action (file reads, writes, bash command
 - Frontend: React + Vite + Tailwind + shadcn/ui + wouter + react-resizable-panels
 - API: Express 5
 - DB: PostgreSQL + Drizzle ORM
-- Agent: Python 3 + ActiveGraph + psycopg2 (spawned as subprocess per run)
+- Agent: Python 3 + ActiveGraph (native PostgresEventStore via psycopg3) + psycopg2 for the UI projection (spawned as subprocess per run)
 - Validation: Zod (`zod/v4`), `drizzle-zod`
 - API codegen: Orval (from OpenAPI spec)
 - Build: esbuild (CJS bundle)
@@ -30,7 +30,7 @@ A web-based coding agent UI where every action (file reads, writes, bash command
 
 - `lib/api-spec/openapi.yaml` — OpenAPI spec (source of truth for all API contracts)
 - `lib/api-client-react/src/generated/` — generated React Query hooks + Zod schemas (do not edit)
-- `lib/db/src/schema/` — Drizzle ORM schema (`runs.ts` has all 4 tables)
+- `lib/db/src/schema/` — Drizzle ORM schema (`runs.ts` has all 5 tables: runs, agent_events, graph_objects, graph_relations, agent_approvals)
 - `artifacts/api-server/src/routes/runs.ts` — all run/event/graph/diff endpoints + SSE stream
 - `artifacts/api-server/src/routes/files.ts` — file listing/content endpoints
 - `scripts/agent/run_agent.py` — Python agent (ActiveGraph demo mode + LLM mode)
@@ -39,8 +39,14 @@ A web-based coding agent UI where every action (file reads, writes, bash command
 ## Architecture decisions
 
 - **Subprocess per run**: The Python agent runs as a detached child process spawned by Express. stdio is suppressed — errors only visible via DB state.
-- **Event-driven via a single Postgres mirror**: The agent is genuinely event-driven — object creation emits ActiveGraph events that wake behaviors (`goal.created`→plan/task→`task.ready`→execute→`edits.completed`→test→`test.run.completed`→bounded fix loop). The runtime's own event stream is the single source of truth: ONE listener (`PostgresMirror`, registered via `graph.add_listener` before the Runtime) is the only writer of `agent_events`/`graph_objects`/`graph_relations` during a run, so those UI tables are a faithful projection rather than a parallel hand-written log.
-- **Reserved event types**: ActiveGraph's `apply_event` projector reserves `object.created/removed`, `relation.created/removed`, `patch.proposed/applied/rejected` and requires its own Patch/Object payload shape. The agent never emits those names with domain payloads (it would crash the projector). The UI's `patch.applied`/`patch.proposed` events are *derived in the mirror* from the patch object's data; framework field-patches are surfaced as `object.patched` to avoid colliding with the file-patch UI.
+- **Native event store is authoritative**: ActiveGraph's `PostgresEventStore` is attached to the runtime (`graph.attach_store`) so the framework durably persists every event to its own `events`/`runs`/`meta` tables in a dedicated `activegraph` Postgres schema (isolated from the app's `public.*`). This is the source of truth; see `docs/tier1-native-event-store.md`.
+- **UI tables are a projection**: ONE listener (`PostgresMirror`, registered via `graph.add_listener` before the Runtime) projects that same event stream into the UI tables (`agent_events`/`graph_objects`/`graph_relations`). It's a derived view — `rebuild_ui_projection` / `--rebuild-projection` reconstructs the UI tables byte-for-byte from the native log.
+- **Runtime owns the LLM+tool loop**: In LLM mode the executor is an `@llm_behavior` declaring `@tool`s (read/write/edit/bash, Pydantic-typed); the runtime drives the turn loop and emits native `llm.*`/`tool.*` events. The handler materializes patch/file_snapshot/command_result/model_call objects from those events with auto-stamped provenance (so `causal_chain()` works). Demo mode (no key) keeps a plain `@behavior` executor. See `docs/tier1-tools-and-llm-behavior.md`.
+- **Real fork + replay**: `/runs/:id/fork` copies the parent's native event log up to the chosen event into the new run (`PostgresEventStore.fork_run`), replays it, projects the inherited prefix, then continues forward with `replay_llm_cache`/`replay_tool_cache` preloaded. Degrades to a fresh continuation for parents predating the native store. See `docs/tier1-native-fork.md`.
+- **Event-driven cascade**: object creation emits ActiveGraph events that wake behaviors (`goal.created`→plan/task→`task.ready`→execute→`edits.completed`→test→`test.run.completed`→bounded fix loop).
+- **Auditability + safety (Tier 2)**: native `causal_chain()` surfaced via `GET /runs/:id/causal-chain` + the CausalChainPanel; a `Policy` declares capabilities and blocked ops emit `policy.denied`; `requireApproval` pauses a run at `awaiting_approval` (approval.requested→granted/denied) resolved via `/runs/:id/approvals`; a `Frame` (goal/constraints) stamps frame_id provenance and `max_cost_usd` (AGENT_MAX_COST_USD) adds token-based cost gating. New DB: `runs.require_approval` + `agent_approvals`. See `docs/tier2-auditability-and-safety.md`.
+- **Showcase polish (Tier 3)**: the coding domain is a typed ActiveGraph `Pack` (`scripts/agent/coding_pack.py` — object/relation schemas validated on every add, plus a Cypher-subset pattern behavior `verification_marker`); observability via `runtime.status()` (emitted as `ops.status`), `PrometheusMetrics` (→ `<work_dir>/.ag-metrics.prom`), and `configure_logging()` (→ `<work_dir>/.ag-agent.log`); the native `activegraph` CLI runs against the store via a `search_path=activegraph` URL. See `docs/operating-ag-coder.md`. The deep-dive `docs/building-with-activegraph.md` was rewritten to document the native architecture.
+- **Reserved event types**: ActiveGraph's `apply_event` projector reserves `object.created/removed`, `relation.created/removed`, `patch.proposed/applied/rejected` and requires its own Patch/Object payload shape. The agent never emits those names with domain payloads (it would crash the projector). The UI's `patch.applied`/`patch.proposed` events are _derived in the mirror_ from the patch object's data; framework field-patches are surfaced as `object.patched` to avoid colliding with the file-patch UI.
 - **Graph object IDs are run-scoped**: IDs like `plan#1` from ActiveGraph are stored as `{run_id[:8]}:{local_id}` (e.g. `0e83e11d:plan#1`) to avoid cross-run collisions in the `graph_objects` table.
 - **SSE + polling hybrid**: The run-detail page uses SSE (`EventSource`) for live events while a run is active, combined with React Query polling for snapshot consistency. Events are merged by ID in a Map.
 - **Demo mode**: Without an LLM API key, the agent runs a deterministic demo scenario — reads files, calls a mock model, proposes a patch — producing real events and graph objects for UI testing.

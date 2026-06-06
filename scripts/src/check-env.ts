@@ -60,9 +60,7 @@ async function checkPython(): Promise<void> {
     await execFileAsync("python3", ["-c", "import activegraph, psycopg2"]);
     ok("Python deps importable (activegraph, psycopg2)");
   } catch {
-    fail(
-      "Python deps missing — run: pip install -r scripts/agent/requirements.txt",
-    );
+    fail("Python deps missing — run: pip install -r scripts/agent/requirements.txt");
     hardFailures++;
   }
 }

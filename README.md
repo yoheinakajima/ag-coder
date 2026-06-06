@@ -110,12 +110,13 @@ Copy the example file and fill in your values:
 cp .env.example .env
 ```
 
-| Variable | Required | Description |
-|---|---|---|
-| `DATABASE_URL` | ✅ **required** | Postgres connection string |
-| `ANTHROPIC_API_KEY` | optional | Enables the Anthropic-powered agent (takes priority if both are set) |
-| `OPENAI_API_KEY` | optional | Enables the OpenAI-powered agent |
-| `SESSION_SECRET` | optional | Express session secret (auto-generated if omitted) |
+| Variable             | Required        | Description                                                                                                   |
+| -------------------- | --------------- | ------------------------------------------------------------------------------------------------------------- |
+| `DATABASE_URL`       | ✅ **required** | Postgres connection string                                                                                    |
+| `ANTHROPIC_API_KEY`  | optional        | Enables the Anthropic-powered agent (takes priority if both are set)                                          |
+| `OPENAI_API_KEY`     | optional        | Enables the OpenAI-powered agent                                                                              |
+| `SESSION_SECRET`     | optional        | Express session secret (auto-generated if omitted)                                                            |
+| `AGENT_MAX_COST_USD` | optional        | Per-run LLM cost ceiling (default `1.00`); the runtime stops with `budget.cost_exhausted` before exceeding it |
 
 > If neither `ANTHROPIC_API_KEY` nor `OPENAI_API_KEY` is set, the agent runs in deterministic **demo mode**.
 
@@ -154,11 +155,11 @@ without any extra proxy setup.
 Sensible defaults work out of the box; these env vars let you harden a public
 deployment (see [`.env.example`](./.env.example) for the full list):
 
-| Variable | Description |
-|---|---|
-| `CORS_ORIGINS` | Extra allowed CORS origins (comma-separated). localhost and Replit domains are always allowed. |
-| `AGENT_API_KEY` | If set, mutating endpoints require this key (`x-api-key` header or `Authorization: Bearer`). Off by default. |
-| `RUN_RATE_LIMIT_MAX` / `RUN_RATE_LIMIT_WINDOW_MS` | Rate limit for creating/forking runs. Defaults to 10 per 60s. |
+| Variable                                          | Description                                                                                                  |
+| ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `CORS_ORIGINS`                                    | Extra allowed CORS origins (comma-separated). localhost and Replit domains are always allowed.               |
+| `AGENT_API_KEY`                                   | If set, mutating endpoints require this key (`x-api-key` header or `Authorization: Bearer`). Off by default. |
+| `RUN_RATE_LIMIT_MAX` / `RUN_RATE_LIMIT_WINDOW_MS` | Rate limit for creating/forking runs. Defaults to 10 per 60s.                                                |
 
 The server also derives each run's working directory server-side under `runs/`
 and only accepts `https://github.com/<owner>/<repo>` URLs for cloning.
@@ -175,30 +176,31 @@ Express API (POST /api/runs)
    │  spawn subprocess
    ▼
 run_agent.py (Python + ActiveGraph)
-   │  one listener mirrors the runtime's event stream
+   │  the runtime persists its own event log; one listener projects it for the UI
    ▼
 PostgreSQL  ◀── API reads + streams via SSE ──▶  Browser
 ```
 
 - **Frontend** — React + Vite + Tailwind + shadcn/ui. The 4-panel run-detail view renders the graph, conversation, file patches, and event stream, streaming live updates over SSE (`GET /api/runs/:id/stream`).
 - **API** — Express 5 + TypeScript, contract-first via an OpenAPI spec with Orval generating typed React Query hooks and Zod schemas. It spawns the agent as a detached subprocess and exposes runs, events, graph objects, file trees, and diffs.
-- **Agent** — a Python process using ActiveGraph, event-driven end to end: creating an object wakes a behavior (goal → plan/task → execute → test → bounded fix loop), and a single listener mirrors the runtime's own event stream into Postgres, so the UI can render the graph as it forms.
-- **Database** — PostgreSQL via Drizzle ORM, with four tables: `runs`, `agent_events`, `graph_objects`, and `graph_relations`.
+- **Agent** — a Python process using ActiveGraph, event-driven end to end: creating an object wakes a behavior (goal → plan/task → execute → test → bounded fix loop). In LLM mode the runtime itself owns the think→act→observe loop via ActiveGraph `@tool`s and an `@llm_behavior` (no hand-rolled SDK loop).
+- **Authoritative log** — ActiveGraph's native `PostgresEventStore` is attached to the runtime, so every event is durably persisted to the framework's own schema-versioned, forkable, replayable tables (in a dedicated `activegraph` Postgres schema).
+- **UI projection** — a single listener (`PostgresMirror`) _projects_ that same event stream into the denormalized tables the UI reads (`runs`, `agent_events`, `graph_objects`, `graph_relations`) — a derived view, not a parallel source of truth. It can be rebuilt from the authoritative log at any time.
 
-**The database is the source of truth for each run.** Stdout can still be useful during development, but the durable audit trail is the graph and event stream in Postgres — that keeps the live UI and the audit trail as the same thing.
+**The framework's event log is the source of truth for each run**, and the UI tables are a projection of it — which is what makes the live UI, the audit trail, and features like real fork + replay the same underlying thing. See the [deeper docs](#deeper-docs) for how each piece maps onto ActiveGraph.
 
 ---
 
 ## Stack
 
-| Layer | Technology |
-|---|---|
-| Frontend | React + Vite + Tailwind + shadcn/ui |
-| API | Express 5 + TypeScript |
-| Agent | Python 3 + ActiveGraph |
-| Database | PostgreSQL + Drizzle ORM |
-| Validation | Zod + drizzle-zod |
-| API contract | OpenAPI → Orval codegen |
+| Layer        | Technology                          |
+| ------------ | ----------------------------------- |
+| Frontend     | React + Vite + Tailwind + shadcn/ui |
+| API          | Express 5 + TypeScript              |
+| Agent        | Python 3 + ActiveGraph              |
+| Database     | PostgreSQL + Drizzle ORM            |
+| Validation   | Zod + drizzle-zod                   |
+| API contract | OpenAPI → Orval codegen             |
 
 ---
 
@@ -211,7 +213,7 @@ artifacts/
 lib/
   api-spec/          # openapi.yaml — source of truth for all API contracts
   api-client-react/  # generated React Query hooks + Zod schemas (don't edit)
-  db/                # Drizzle schema (runs, agent_events, graph_objects, graph_relations)
+  db/                # Drizzle schema (runs, agent_events, graph_objects, graph_relations, agent_approvals)
 scripts/
   agent/             # run_agent.py — Python agent (OpenAI / Anthropic / demo)
 runs/                # per-run working directories (generated, gitignored)
@@ -248,6 +250,13 @@ This is not intended to be a full production coding environment, IDE replacement
 ## Deeper docs
 
 - [Building a coding agent you can actually audit — with ActiveGraph](./docs/building-with-activegraph.md) — the deeper technical walkthrough of how AG Coder is built on ActiveGraph.
+- How AG Coder leans on ActiveGraph's own primitives (recent architecture work):
+  - [Native event store as the authoritative log](./docs/tier1-native-event-store.md)
+  - [The runtime owns the LLM + tool loop (`@tool` / `@llm_behavior`)](./docs/tier1-tools-and-llm-behavior.md)
+  - [Real fork + replay built on `PostgresEventStore.fork_run`](./docs/tier1-native-fork.md)
+  - [Auditability + safety: native `causal_chain`, `Policy` + approvals, `Frame` + cost budget](./docs/tier2-auditability-and-safety.md)
+  - [Operating AG Coder: RuntimeStatus, Prometheus, logging, and the `activegraph` CLI](./docs/operating-ag-coder.md)
+  - The coding domain is declared as a typed [`Pack`](./scripts/agent/coding_pack.py) (object/relation schemas + a pattern behavior).
 - [Contributing](./CONTRIBUTING.md) — setup, conventions, and the contract-first API workflow.
 - [ActiveGraph](https://activegraph.ai) · [`activegraph` on PyPI](https://pypi.org/project/activegraph/)
 

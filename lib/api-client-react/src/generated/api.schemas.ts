@@ -15,9 +15,11 @@ export type RunStatus = typeof RunStatus[keyof typeof RunStatus];
 export const RunStatus = {
   pending: 'pending',
   running: 'running',
+  awaiting_approval: 'awaiting_approval',
   completed: 'completed',
   failed: 'failed',
   cancelled: 'cancelled',
+  rejected: 'rejected',
 } as const;
 
 /**
@@ -52,6 +54,7 @@ export interface Run {
   prUrl?: string | null;
   /** @nullable */
   prStatus?: RunPrStatus;
+  requireApproval?: boolean;
   eventCount?: number;
   createdAt: string;
   /** @nullable */
@@ -151,6 +154,48 @@ export interface RunInput {
   repoBranch?: string | null;
   /** @nullable */
   prUrl?: string | null;
+  /** Pause at awaiting_approval; a human must approve before changes are committed. */
+  requireApproval?: boolean;
+}
+
+export type ApprovalStatus = typeof ApprovalStatus[keyof typeof ApprovalStatus];
+
+
+export const ApprovalStatus = {
+  pending: 'pending',
+  approved: 'approved',
+  rejected: 'rejected',
+} as const;
+
+export interface Approval {
+  id: string;
+  runId: string;
+  kind: string;
+  status: ApprovalStatus;
+  /** @nullable */
+  summary?: string | null;
+  createdAt: string;
+  /** @nullable */
+  resolvedAt?: string | null;
+}
+
+export type ApprovalDecisionDecision = typeof ApprovalDecisionDecision[keyof typeof ApprovalDecisionDecision];
+
+
+export const ApprovalDecisionDecision = {
+  approve: 'approve',
+  reject: 'reject',
+} as const;
+
+export interface ApprovalDecision {
+  decision: ApprovalDecisionDecision;
+}
+
+export interface ApprovalResult {
+  runId: string;
+  approvalId: string;
+  decision: string;
+  status: string;
 }
 
 export interface ForkInput {
@@ -310,6 +355,14 @@ export interface FileContent {
   size?: number;
 }
 
+export interface CausalChain {
+  runId: string;
+  /** Local graph object id the chain was computed for */
+  objectId: string;
+  /** ActiveGraph's causal_chain rendering — the object walked back through its LLM/tool calls and triggering events up to goal.created. */
+  chain: string;
+}
+
 export interface GithubRepo {
   /** owner/repo */
   fullName: string;
@@ -320,6 +373,13 @@ export interface GithubRepo {
 export interface GithubRepoList {
   repos: GithubRepo[];
 }
+
+export type GetRunCausalChainParams = {
+/**
+ * Scoped or local graph object id to trace back to the goal
+ */
+objectId: string;
+};
 
 export type GetRunFileContentParams = {
 path: string;
