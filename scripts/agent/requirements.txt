@@ -24,7 +24,9 @@ psycopg[binary]>=3.1,<4
 # framework store's psycopg 3 connection; the two never share a connection.
 psycopg2-binary>=2.9,<3
 
-# LLM SDKs — only needed for live model mode. Without an API key the agent runs
+# LLM SDKs — used by ActiveGraph's AnthropicProvider / OpenAIProvider, which
+# drive the @llm_behavior turn loop. The agent no longer calls these SDKs
+# directly. Only needed for live model mode; without an API key the agent runs
 # in deterministic demo mode and these are unused (but harmless to install).
 anthropic>=0.105,<1
 openai>=2,<3

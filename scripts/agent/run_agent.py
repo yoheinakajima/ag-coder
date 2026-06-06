@@ -437,6 +437,17 @@ class PostgresMirror:
         # Domain + behavior.failed events pass straight through to the stream.
         self._record(etype, payload)
 
+        # When the runtime owns the LLM turn loop (@llm_behavior), the assistant's
+        # prose lives in llm.responded.raw_text, not in a domain
+        # assistant.message.added. Derive the conversation message from it so the
+        # UI's conversation panel stays populated without the behavior emitting
+        # one by hand. (Demo mode emits assistant.message.added directly and has
+        # no raw_text on its llm.responded, so this never double-counts.)
+        if etype == "llm.responded":
+            text = (payload.get("raw_text") or "").strip()
+            if text:
+                self._record("assistant.message.added", {"role": "assistant", "content": text})
+
     def _derive_patch_event(self, local_id: str, data: dict) -> None:
         """Synthesize the UI's file-patch event from a patch object's data.
 
@@ -753,6 +764,199 @@ def _git_commit(run_id: str, goal: str, branch_name: str, work_dir: str, conn, g
     return True
 
 
+# ── Native ActiveGraph tools (@tool) ────────────────────────────────────────────
+# In LLM mode the agent does NOT hand-roll the provider SDK loop. It registers
+# these as first-class ActiveGraph Tools and lets the runtime own the turn loop:
+# prompt assembly, llm.requested/responded, tool.requested/responded, schema
+# validation, caching and replay all flow through the framework. The tool bodies
+# are pure (path in, structured result out) so they're cacheable/replayable; the
+# graph objects (patch / file_snapshot / command_result) are created afterwards
+# by the @llm_behavior handler from the recorded tool events.
+
+from pydantic import BaseModel  # noqa: E402 — hard dep via activegraph
+
+
+class _ReadFileIn(BaseModel):
+    path: str
+    start_line: Optional[int] = None
+    end_line: Optional[int] = None
+
+
+class _ReadFileOut(BaseModel):
+    ok: bool
+    content: str = ""
+    error: Optional[str] = None
+
+
+class _WriteFileIn(BaseModel):
+    path: str
+    content: str
+
+
+class _PatchOut(BaseModel):
+    ok: bool
+    path: str
+    diff: str = ""
+    lines_added: int = 0
+    lines_removed: int = 0
+    error: Optional[str] = None
+
+
+class _EditFileIn(BaseModel):
+    path: str
+    search: str
+    replace: str
+
+
+class _BashIn(BaseModel):
+    command: str
+    timeout: int = 30
+
+
+class _BashOut(BaseModel):
+    ok: bool
+    output: str = ""
+    error: Optional[str] = None
+
+
+def _diff_stats(before: str, after: str, path: str) -> tuple[str, int, int]:
+    diff_lines = list(difflib.unified_diff(
+        before.splitlines(keepends=True),
+        after.splitlines(keepends=True),
+        fromfile=f"a/{path}", tofile=f"b/{path}", lineterm="",
+    ))
+    text = "\n".join(diff_lines)
+    added = sum(1 for l in diff_lines if l.startswith("+") and not l.startswith("+++"))
+    removed = sum(1 for l in diff_lines if l.startswith("-") and not l.startswith("---"))
+    return text, added, removed
+
+
+def _build_tools(work_dir: str) -> list:
+    """Build the ActiveGraph Tool objects bound to this run's work dir.
+
+    Tools never raise on expected failures (missing file, blocked command):
+    they return ``ok=False`` so the model can see the error and react, rather
+    than failing the whole behavior.
+    """
+    from activegraph import tool
+
+    @tool(name="read_file", description="Read the contents of a file.",
+          input_schema=_ReadFileIn, output_schema=_ReadFileOut)
+    def read_file(args: _ReadFileIn, ctx) -> _ReadFileOut:
+        r = tool_read(args.path, args.start_line, args.end_line, work_dir)
+        return _ReadFileOut(ok=r.ok, content=r.output if r.ok else "", error=r.error)
+
+    @tool(name="write_file", description="Write content to a file, creating it if needed.",
+          input_schema=_WriteFileIn, output_schema=_PatchOut)
+    def write_file(args: _WriteFileIn, ctx) -> _PatchOut:
+        full = Path(work_dir) / args.path
+        before = full.read_text(encoding="utf-8", errors="replace") if full.is_file() else ""
+        r = tool_write(args.path, args.content, work_dir)
+        if not r.ok:
+            return _PatchOut(ok=False, path=args.path, error=r.error)
+        diff, added, removed = _diff_stats(before, args.content, args.path)
+        return _PatchOut(ok=True, path=args.path, diff=diff, lines_added=added, lines_removed=removed)
+
+    @tool(name="edit_file", description="Edit a file by replacing the first occurrence of a string.",
+          input_schema=_EditFileIn, output_schema=_PatchOut)
+    def edit_file(args: _EditFileIn, ctx) -> _PatchOut:
+        full = Path(work_dir) / args.path
+        before = full.read_text(encoding="utf-8", errors="replace") if full.is_file() else ""
+        r = tool_edit(args.path, args.search, args.replace, work_dir)
+        if not r.ok:
+            return _PatchOut(ok=False, path=args.path, error=r.error)
+        after = full.read_text(encoding="utf-8", errors="replace") if full.is_file() else before
+        diff, added, removed = _diff_stats(before, after, args.path)
+        return _PatchOut(ok=True, path=args.path, diff=diff, lines_added=added, lines_removed=removed)
+
+    @tool(name="bash", description="Execute a shell command. Dangerous commands are blocked.",
+          input_schema=_BashIn, output_schema=_BashOut)
+    def bash(args: _BashIn, ctx) -> _BashOut:
+        danger = is_dangerous(args.command)
+        if danger:
+            return _BashOut(ok=False, error=f"Blocked dangerous command: {danger}")
+        r = tool_bash(args.command, work_dir, args.timeout)
+        return _BashOut(ok=r.ok, output=r.output, error=r.error)
+
+    return [read_file, write_file, edit_file, bash]
+
+
+def _materialize_tool_objects(graph, bgraph, task_id) -> None:
+    """Turn the tool/LLM events the runtime recorded during an @llm_behavior
+    turn loop into the graph objects the UI renders.
+
+    The runtime stamps this invocation's ``tool.requested`` event ids onto
+    ``bgraph``; we pair each with its ``tool.responded`` and create the matching
+    domain object (patch / file_snapshot / command_result), plus one model_call
+    summarizing the LLM round-trips. BehaviorGraph auto-stamps provenance, so
+    each object links back to the tool/LLM events for causal-chain walks.
+    """
+    tr_ids = list(getattr(bgraph, "_tool_request_event_ids", []) or [])
+    by_id = {e.id: e for e in graph.events}
+    resp_by_req = {
+        e.caused_by: e
+        for e in graph.events
+        if e.type == "tool.responded" and e.caused_by in tr_ids
+    }
+
+    for tr_id in tr_ids:
+        req = by_id.get(tr_id)
+        if req is None:
+            continue
+        tool_name = req.payload.get("tool")
+        args = req.payload.get("args") or {}
+        resp = resp_by_req.get(tr_id)
+        out = (resp.payload.get("output") if resp else None) or {}
+        ok = bool(out.get("ok", True))
+
+        if tool_name in ("write_file", "edit_file") and ok:
+            patch = bgraph.add_object("patch", {
+                "path": out.get("path") or args.get("path"),
+                "type": "write" if tool_name == "write_file" else "edit",
+                "status": "applied",
+                "task_id": task_id,
+                "diff": out.get("diff", ""),
+                "lines_added": out.get("lines_added", 0),
+                "lines_removed": out.get("lines_removed", 0),
+            })
+            bgraph.add_relation(task_id, patch.id, "TASK_HAS_PATCH")
+        elif tool_name == "read_file" and ok:
+            snap = bgraph.add_object("file_snapshot", {
+                "path": args.get("path"),
+                "content_preview": (out.get("content") or "")[:200],
+                "task_id": task_id,
+            })
+            bgraph.add_relation(task_id, snap.id, "TASK_HAS_FILE_SNAPSHOT")
+        elif tool_name == "bash":
+            cmd = bgraph.add_object("command_result", {
+                "command": args.get("command"),
+                "ok": ok,
+                "output_preview": (out.get("output") or "")[:300],
+                "task_id": task_id,
+            })
+            bgraph.add_relation(task_id, cmd.id, "TASK_HAS_COMMAND_RESULT")
+
+    # Summarize the LLM round-trips as a model_call node (UI continuity).
+    model = None
+    in_tok = out_tok = turns = 0
+    for e in graph.events:
+        if e.type == "llm.responded" and e.payload.get("behavior") == "task_executor":
+            turns += 1
+            model = e.payload.get("model", model)
+            in_tok += int(e.payload.get("input_tokens", 0) or 0)
+            out_tok += int(e.payload.get("output_tokens", 0) or 0)
+    if turns:
+        mc = bgraph.add_object("model_call", {
+            "model": model or "?",
+            "status": "completed",
+            "task_id": task_id,
+            "input_tokens": in_tok,
+            "output_tokens": out_tok,
+            "turns": turns,
+        })
+        bgraph.add_relation(task_id, mc.id, "TASK_HAS_MODEL_CALL")
+
+
 # ── Event-driven ActiveGraph agent ──────────────────────────────────────────────
 
 # How many automatic fix passes to attempt when tests fail. Bounds the
@@ -903,28 +1107,76 @@ def run_with_activegraph(run_id: str, goal: str, work_dir: str, conn,
         bgraph.emit("task.created", {"task_id": task.id, "title": task.data["title"], "plan_id": plan.id})
         bgraph.emit("task.ready", {"task_id": task.id})
 
-    @behavior(name="task_executor", on=["task.ready"])
-    def task_executor(event, bgraph, ctx):
-        """Execute a task with the available tools, then signal that edits are done."""
+    @behavior(name="task_claimer", on=["task.ready"])
+    def task_claimer(event, bgraph, ctx):
+        """Mark a task in-progress before either executor runs."""
         task_id = event.payload.get("task_id")
         task_obj = bgraph.get_object(task_id)
         if task_obj is None:
             return
-
-        task_description = task_obj.data.get("description", task_obj.data.get("title", ""))
-        bgraph.emit("task.claimed", {"task_id": task_id, "description": task_description})
+        description = task_obj.data.get("description", task_obj.data.get("title", ""))
+        bgraph.emit("task.claimed", {"task_id": task_id, "description": description})
         bgraph.patch_object(task_id, {"status": "in_progress"})
 
-        if llm_provider is None:
-            _run_demo_mode(bgraph, task_id, task_description, work_dir)
-        else:
-            _run_llm_mode(bgraph, task_id, task_description, work_dir)
-
+    def _finish_task(bgraph, task_id):
         bgraph.patch_object(task_id, {"status": "completed"})
         bgraph.emit("task.completed", {"task_id": task_id})
         # Debounced hand-off: one signal per implementation pass wakes the
-        # test_runner (rather than waking it on every individual patch.applied).
+        # test_runner (rather than waking it on every individual patch).
         bgraph.emit("edits.completed", {"task_id": task_id})
+
+    runtime_tools = None
+
+    if llm_provider is None:
+        # ── Demo executor: no provider, deterministic scripted trace ──────────
+        @behavior(name="task_executor", on=["task.ready"])
+        def task_executor(event, bgraph, ctx):
+            task_id = event.payload.get("task_id")
+            task_obj = bgraph.get_object(task_id)
+            if task_obj is None:
+                return
+            description = task_obj.data.get("description", task_obj.data.get("title", ""))
+            _run_demo_mode(bgraph, task_id, description, work_dir)
+            _finish_task(bgraph, task_id)
+    else:
+        # ── LLM executor: the RUNTIME owns the turn loop (@llm_behavior). ──────
+        # The framework assembles the prompt, calls the provider, drives the
+        # read/write/edit/bash tool loop, validates I/O, and emits native
+        # llm.* / tool.* events. Our handler runs once at the end and turns the
+        # recorded tool events into the graph objects the UI renders.
+        from activegraph import llm_behavior
+
+        executor_tools = _build_tools(work_dir)
+        runtime_tools = executor_tools
+
+        system_prompt = (
+            "You are AG Coder, a coding agent built on ActiveGraph. Complete the "
+            "task described in the triggering event by editing files in the work "
+            "directory.\n"
+            "Rules:\n"
+            "- Read a file before editing it.\n"
+            "- Prefer focused edits over large rewrites; write working code.\n"
+            "- Never touch: .env, .git/, node_modules/, package-lock.json.\n"
+            "- Do NOT run git commands — commit/push is handled automatically "
+            "after you finish. Just edit the files.\n"
+            "- When the task is done, reply with a short summary of what you changed."
+        )
+
+        @llm_behavior(
+            name="task_executor",
+            on=["task.ready"],
+            description=system_prompt,
+            tools=executor_tools,
+            max_tool_turns=12,
+            max_tokens=4096,
+            temperature=0,
+        )
+        def task_executor(event, bgraph, ctx, llm_output):
+            """Runs AFTER the runtime's LLM+tool loop; materializes graph objects
+            from the recorded tool events, then completes the task."""
+            task_id = event.payload.get("task_id")
+            _materialize_tool_objects(graph, bgraph, task_id)
+            _finish_task(bgraph, task_id)
 
     @behavior(name="test_runner", on=["edits.completed"])
     def test_runner(event, bgraph, ctx):
@@ -1024,7 +1276,8 @@ def run_with_activegraph(run_id: str, goal: str, work_dir: str, conn,
         bgraph.emit("task.ready", {"task_id": fix_task.id})
 
     budget = {"max_events": 500, "max_seconds": 300}
-    runtime = Runtime(graph, budget=budget, llm_provider=llm_provider, **replay_caches)
+    runtime = Runtime(graph, budget=budget, llm_provider=llm_provider,
+                      tools=runtime_tools, **replay_caches)
 
     try:
         # ── Git: clone + branch before the task loop ──────────────────────────
@@ -1133,181 +1386,6 @@ def _run_demo_mode(bgraph, task_id, task_description, work_dir):
     })
 
 
-def _execute_tool_call(bgraph, task_id, tool_name, tool_input, work_dir):
-    """Execute a single tool call, recording graph nodes/events. Returns output text."""
-    if tool_name == "read_file":
-        result = tool_read(
-            tool_input["path"],
-            tool_input.get("start_line"),
-            tool_input.get("end_line"),
-            work_dir,
-        )
-        if result.ok:
-            snap = bgraph.add_object("file_snapshot", {
-                "path": tool_input["path"],
-                "content_preview": result.output[:200],
-                "task_id": task_id,
-            })
-            bgraph.add_relation(task_id, snap.id, "TASK_HAS_FILE_SNAPSHOT")
-            bgraph.emit("file.snapshot.created", {"snapshot_id": snap.id, "path": tool_input["path"]})
-
-    elif tool_name == "write_file":
-        # Read existing content before overwriting so we can produce a real diff.
-        _before_content = ""
-        _write_full_path = Path(work_dir) / tool_input["path"]
-        if _write_full_path.is_file():
-            try:
-                _before_content = _write_full_path.read_text(encoding="utf-8", errors="replace")
-            except Exception:
-                _before_content = ""
-
-        result = tool_write(tool_input["path"], tool_input["content"], work_dir)
-        if result.ok:
-            _after_content = tool_input["content"]
-            _diff_lines = list(difflib.unified_diff(
-                _before_content.splitlines(keepends=True),
-                _after_content.splitlines(keepends=True),
-                fromfile=f"a/{tool_input['path']}",
-                tofile=f"b/{tool_input['path']}",
-                lineterm="",
-            ))
-            _diff_text = "\n".join(_diff_lines)
-            _lines_added = sum(1 for l in _diff_lines if l.startswith("+") and not l.startswith("+++"))
-            _lines_removed = sum(1 for l in _diff_lines if l.startswith("-") and not l.startswith("---"))
-            patch = bgraph.add_object("patch", {
-                "path": tool_input["path"],
-                "type": "write",
-                "status": "applied",
-                "task_id": task_id,
-                "content_preview": tool_input["content"][:200],
-                "diff": _diff_text,
-                "lines_added": _lines_added,
-                "lines_removed": _lines_removed,
-            })
-            bgraph.add_relation(task_id, patch.id, "TASK_HAS_PATCH")
-            # The mirror derives the UI's patch.applied event from this object.
-
-    elif tool_name == "edit_file":
-        # Read existing content before editing for a real diff.
-        _before_content = ""
-        _edit_full_path = Path(work_dir) / tool_input["path"]
-        if _edit_full_path.is_file():
-            try:
-                _before_content = _edit_full_path.read_text(encoding="utf-8", errors="replace")
-            except Exception:
-                _before_content = ""
-
-        result = tool_edit(tool_input["path"], tool_input["search"], tool_input["replace"], work_dir)
-        if result.ok:
-            _after_content = ""
-            try:
-                _after_content = _edit_full_path.read_text(encoding="utf-8", errors="replace")
-            except Exception:
-                _after_content = _before_content.replace(tool_input["search"], tool_input["replace"], 1)
-            _diff_lines = list(difflib.unified_diff(
-                _before_content.splitlines(keepends=True),
-                _after_content.splitlines(keepends=True),
-                fromfile=f"a/{tool_input['path']}",
-                tofile=f"b/{tool_input['path']}",
-                lineterm="",
-            ))
-            _diff_text = "\n".join(_diff_lines)
-            _lines_added = sum(1 for l in _diff_lines if l.startswith("+") and not l.startswith("+++"))
-            _lines_removed = sum(1 for l in _diff_lines if l.startswith("-") and not l.startswith("---"))
-            patch = bgraph.add_object("patch", {
-                "path": tool_input["path"],
-                "type": "edit",
-                "status": "applied",
-                "search_preview": tool_input["search"][:100],
-                "replace_preview": tool_input["replace"][:100],
-                "task_id": task_id,
-                "diff": _diff_text,
-                "lines_added": _lines_added,
-                "lines_removed": _lines_removed,
-            })
-            bgraph.add_relation(task_id, patch.id, "TASK_HAS_PATCH")
-            # The mirror derives the UI's patch.applied event from this object.
-
-    elif tool_name == "bash":
-        danger = is_dangerous(tool_input["command"])
-        if danger:
-            bgraph.emit("dangerous_command.detected", {"command": tool_input["command"], "matched": danger})
-            result = ToolResult(ok=False, output="", error=f"Blocked: {danger}")
-        else:
-            result = tool_bash(tool_input["command"], work_dir, tool_input.get("timeout", 30))
-            cmd_result = bgraph.add_object("command_result", {
-                "command": tool_input["command"],
-                "ok": result.ok,
-                "output_preview": result.output[:300],
-                "task_id": task_id,
-            })
-            bgraph.add_relation(task_id, cmd_result.id, "TASK_HAS_COMMAND_RESULT")
-            bgraph.emit("bash.command.completed", {"ok": result.ok, "command": tool_input["command"]})
-    else:
-        result = ToolResult(ok=False, output="", error=f"Unknown tool: {tool_name}")
-
-    output_content = result.output if result.ok else f"Error: {result.error}"
-    bgraph.emit("tool.responded", {"tool": tool_name, "ok": result.ok, "output": output_content[:500]})
-    return output_content
-
-
-# ── Tool schemas ───────────────────────────────────────────────────────────────
-
-_TOOL_PROPS = {
-    "read_file": {
-        "description": "Read the contents of a file.",
-        "properties": {
-            "path": {"type": "string", "description": "File path relative to work directory"},
-            "start_line": {"type": "integer", "description": "First line to read (1-indexed)"},
-            "end_line": {"type": "integer", "description": "Last line to read (inclusive)"},
-        },
-        "required": ["path"],
-    },
-    "write_file": {
-        "description": "Write content to a file, creating it if needed.",
-        "properties": {
-            "path": {"type": "string", "description": "File path relative to work directory"},
-            "content": {"type": "string", "description": "Full file content to write"},
-        },
-        "required": ["path", "content"],
-    },
-    "edit_file": {
-        "description": "Edit a file by replacing the first occurrence of a string.",
-        "properties": {
-            "path": {"type": "string", "description": "File path relative to work directory"},
-            "search": {"type": "string", "description": "Exact string to find"},
-            "replace": {"type": "string", "description": "Replacement string"},
-        },
-        "required": ["path", "search", "replace"],
-    },
-    "bash": {
-        "description": "Execute a shell command. Dangerous commands are blocked.",
-        "properties": {
-            "command": {"type": "string", "description": "Shell command to run"},
-            "timeout": {"type": "integer", "description": "Timeout in seconds (default 30)"},
-        },
-        "required": ["command"],
-    },
-}
-
-def _anthropic_tools():
-    return [
-        {"name": name, "description": spec["description"],
-         "input_schema": {"type": "object", "properties": spec["properties"], "required": spec["required"]}}
-        for name, spec in _TOOL_PROPS.items()
-    ]
-
-def _openai_tools():
-    return [
-        {"type": "function", "function": {
-            "name": name,
-            "description": spec["description"],
-            "parameters": {"type": "object", "properties": spec["properties"], "required": spec["required"]},
-        }}
-        for name, spec in _TOOL_PROPS.items()
-    ]
-
-
 def _parse_test_output(output: str, framework: str) -> dict:
     """Extract passed/failed/total counts from pytest or jest output."""
     passed = 0
@@ -1338,133 +1416,6 @@ def _parse_test_output(output: str, framework: str) -> dict:
             total = passed + failed
     return {"passed": passed, "failed": failed, "total": total or (passed + failed)}
 
-
-def _run_llm_mode(bgraph, task_id, task_description, work_dir):
-    """Run with a real LLM. Auto-selects Anthropic or OpenAI based on available keys.
-
-    Test execution is NOT done here — the test_runner behavior runs the suite
-    after the task_executor emits ``edits.completed``.
-    """
-    use_openai = bool(os.environ.get("OPENAI_API_KEY")) and not bool(os.environ.get("ANTHROPIC_API_KEY"))
-
-    system_prompt = (
-        f"You are AG Coder, a coding agent powered by ActiveGraph.\n"
-        f"Work directory: {work_dir}\n\n"
-        f"Rules:\n"
-        f"- Read files before editing them\n"
-        f"- Write working, tested code\n"
-        f"- Run tests after making changes\n"
-        f"- Be concise — focused changes over large rewrites\n"
-        f"- Never touch: .env, .git/, node_modules/, package-lock.json\n"
-        f"- Do NOT run any git commands (commit, push, branch, etc.) — committing "
-        f"your changes and pushing to GitHub is handled automatically after you "
-        f"finish. Just edit the files.\n\n"
-        f"Task: {task_description}"
-    )
-
-    bgraph.emit("assistant.message.added", {"role": "system", "content": system_prompt, "task_id": task_id})
-
-    if use_openai:
-        _run_openai_loop(bgraph, task_id, task_description, work_dir, system_prompt)
-    else:
-        _run_anthropic_loop(bgraph, task_id, task_description, work_dir, system_prompt)
-
-
-def _run_anthropic_loop(bgraph, task_id, task_description, work_dir, system_prompt):
-    import anthropic
-    client = anthropic.Anthropic()
-    model = "claude-3-5-haiku-20241022"
-    tools = _anthropic_tools()
-    messages = [{"role": "user", "content": task_description}]
-
-    for i in range(10):
-        bgraph.emit("llm.requested", {"model": model, "iteration": i + 1, "messages": len(messages)})
-        try:
-            response = client.messages.create(
-                model=model, max_tokens=8192, system=system_prompt,
-                tools=tools, messages=messages,
-            )
-        except Exception as e:
-            bgraph.emit("behavior.failed", {"error": str(e), "behavior": "llm_call"})
-            break
-
-        bgraph.emit("llm.responded", {
-            "model": model, "stop_reason": response.stop_reason,
-            "input_tokens": response.usage.input_tokens, "output_tokens": response.usage.output_tokens,
-        })
-
-        tool_calls_this_turn = []
-        text_parts = []
-        for block in response.content:
-            if block.type == "text":
-                text_parts.append(block.text)
-            elif block.type == "tool_use":
-                tool_calls_this_turn.append(block)
-
-        if text_parts:
-            bgraph.emit("assistant.message.added", {"role": "assistant", "content": "\n".join(text_parts), "task_id": task_id})
-
-        messages.append({"role": "assistant", "content": response.content})
-
-        if response.stop_reason == "end_turn" or not tool_calls_this_turn:
-            break
-
-        tool_results = []
-        for tc in tool_calls_this_turn:
-            bgraph.emit("tool.requested", {"tool": tc.name, "input": tc.input, "task_id": task_id})
-            out = _execute_tool_call(bgraph, task_id, tc.name, tc.input, work_dir)
-            tool_results.append({"type": "tool_result", "tool_use_id": tc.id, "content": out})
-        messages.append({"role": "user", "content": tool_results})
-
-
-def _run_openai_loop(bgraph, task_id, task_description, work_dir, system_prompt):
-    from openai import OpenAI
-    client = OpenAI()
-    model = "gpt-4o-mini"
-    tools = _openai_tools()
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": task_description},
-    ]
-
-    for i in range(10):
-        bgraph.emit("llm.requested", {"model": model, "iteration": i + 1, "messages": len(messages)})
-        try:
-            response = client.chat.completions.create(
-                model=model, tools=tools, messages=messages,
-                tool_choice="auto", max_tokens=8192,
-            )
-        except Exception as e:
-            bgraph.emit("behavior.failed", {"error": str(e), "behavior": "llm_call"})
-            break
-
-        msg = response.choices[0].message
-        finish = response.choices[0].finish_reason
-        bgraph.emit("llm.responded", {
-            "model": model, "stop_reason": finish,
-            "input_tokens": response.usage.prompt_tokens,
-            "output_tokens": response.usage.completion_tokens,
-        })
-
-        if msg.content:
-            bgraph.emit("assistant.message.added", {"role": "assistant", "content": msg.content, "task_id": task_id})
-
-        messages.append(msg)
-
-        if finish == "stop" or not msg.tool_calls:
-            break
-
-        tool_results = []
-        for tc in msg.tool_calls:
-            import json as _json
-            tool_input = _json.loads(tc.function.arguments)
-            bgraph.emit("tool.requested", {"tool": tc.function.name, "input": tool_input, "task_id": task_id})
-            out = _execute_tool_call(bgraph, task_id, tc.function.name, tool_input, work_dir)
-            tool_results.append({"role": "tool", "tool_call_id": tc.id, "content": out})
-        messages.extend(tool_results)
-
-
-# ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
     parser = argparse.ArgumentParser(description="AG Coder runner")
