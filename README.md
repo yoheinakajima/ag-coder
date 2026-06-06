@@ -253,6 +253,7 @@ This is not intended to be a full production coding environment, IDE replacement
   - [Native event store as the authoritative log](./docs/tier1-native-event-store.md)
   - [The runtime owns the LLM + tool loop (`@tool` / `@llm_behavior`)](./docs/tier1-tools-and-llm-behavior.md)
   - [Real fork + replay built on `PostgresEventStore.fork_run`](./docs/tier1-native-fork.md)
+  - [Auditability + safety: native `causal_chain`, `Policy` + approvals, `Frame` + cost budget](./docs/tier2-auditability-and-safety.md)
 - [Contributing](./CONTRIBUTING.md) — setup, conventions, and the contract-first API workflow.
 - [ActiveGraph](https://activegraph.ai) · [`activegraph` on PyPI](https://pypi.org/project/activegraph/)
 
