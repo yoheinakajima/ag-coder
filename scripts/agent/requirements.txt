@@ -7,9 +7,21 @@
 # importable from that interpreter's path.
 
 # Event-driven graph runtime the agent is built on.
-activegraph==1.0.5.post2
+#
+# The [postgres] extra pulls in psycopg 3.x, which backs ActiveGraph's NATIVE
+# PostgresEventStore. The runtime persists its own authoritative event log to
+# that store (see `_open_native_store` in run_agent.py); the UI's projection
+# tables are derived from it rather than hand-written as a parallel trace.
+activegraph[postgres]==1.0.5.post2
 
-# PostgreSQL driver — the agent writes events/graph objects directly to Postgres.
+# psycopg 3.x — required by ActiveGraph's PostgresEventStore (the framework's
+# durable, forkable, replayable event log). Normally installed by the
+# [postgres] extra above; pinned here so it's explicit.
+psycopg[binary]>=3.1,<4
+
+# psycopg 2.x — the application's own connection to the UI projection tables
+# (runs / agent_events / graph_objects / graph_relations). Distinct from the
+# framework store's psycopg 3 connection; the two never share a connection.
 psycopg2-binary>=2.9,<3
 
 # LLM SDKs — only needed for live model mode. Without an API key the agent runs

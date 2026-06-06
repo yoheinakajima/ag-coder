@@ -102,18 +102,81 @@ def update_run_repo_branch(conn, run_id: str, branch: str):
     conn.commit()
 
 
-# ── The single trace mirror ─────────────────────────────────────────────────────
+# ── The native ActiveGraph event store (authoritative log) ──────────────────────
+# Tier-1 of the "make this a true ActiveGraph showcase" work: rather than treating
+# the hand-written PostgresMirror as the source of truth, we attach ActiveGraph's
+# OWN PostgresEventStore to the graph. The runtime then persists every event it
+# emits to that store automatically (Graph.emit -> store.append), giving us the
+# framework's durable, schema-versioned, forkable, replayable event log for free.
+#
+# The store keeps its tables (events / runs / meta) in a dedicated Postgres schema
+# so they never collide with the application's public.* tables — in particular the
+# app already owns a `runs` table with a different shape. Everything still lives in
+# one database (one DATABASE_URL); only the schema namespace differs.
+
+NATIVE_STORE_SCHEMA = "activegraph"
+
+
+def _open_native_store(run_id: str):
+    """Open ActiveGraph's native PostgresEventStore in an isolated schema.
+
+    Returns ``(store, conn)`` on success or ``(None, None)`` if the optional
+    psycopg 3 / store dependency is missing or the connection fails. The native
+    log is *additive* — a faithful, framework-owned copy of the run — so failing
+    to open it must never break a run; the UI projection (PostgresMirror) still
+    works on its own.
+    """
+    if not DATABASE_URL:
+        return None, None
+    try:
+        import psycopg  # psycopg 3.x, required by PostgresEventStore
+        from activegraph.store.postgres import PostgresEventStore
+    except Exception:
+        return None, None
+
+    sconn = None
+    try:
+        # autocommit=True mirrors how PostgresEventStore manages a URL-owned
+        # connection: each append() commits on its own.
+        sconn = psycopg.connect(DATABASE_URL, autocommit=True)
+        with sconn.cursor() as cur:
+            cur.execute(f'CREATE SCHEMA IF NOT EXISTS "{NATIVE_STORE_SCHEMA}"')
+            # Pin the session to the store's schema so the store's
+            # CREATE TABLE IF NOT EXISTS events/runs/meta land there and never
+            # resolve to the app's public.runs.
+            cur.execute(f'SET search_path TO "{NATIVE_STORE_SCHEMA}"')
+        store = PostgresEventStore(sconn, run_id)  # runs _ensure_schema()
+        return store, sconn
+    except Exception:
+        if sconn is not None:
+            try:
+                sconn.close()
+            except Exception:
+                pass
+        return None, None
+
+
+# ── The UI projection mirror ────────────────────────────────────────────────────
 
 
 class PostgresMirror:
-    """The one bridge between the ActiveGraph runtime and the UI's Postgres tables.
+    """Projects the runtime's event stream into the UI's read-model tables.
 
-    Subscribed via ``graph.add_listener``, this fires synchronously inside
+    The AUTHORITATIVE log is ActiveGraph's own ``PostgresEventStore`` (attached
+    to the graph via ``_open_native_store``); the runtime persists every event
+    there automatically. This mirror is a *downstream projection* of that same
+    stream into the denormalized tables the UI reads — ``agent_events`` /
+    ``graph_objects`` / ``graph_relations`` — not a parallel, hand-maintained
+    source of truth. Because the projection is a pure function of the event
+    stream, the UI tables can be dropped and rebuilt from the native store at
+    any time (see ``rebuild_ui_projection``), which is what makes replay and
+    fork tractable.
+
+    Subscribed via ``graph.add_listener``, ``project`` fires synchronously inside
     ``graph.emit`` for EVERY event the runtime produces, AFTER the event has been
-    appended to the log and projected into graph state. It is the single writer
-    of ``agent_events`` / ``graph_objects`` / ``graph_relations`` for the run, so
-    those tables are a faithful projection of the runtime's own event stream
-    rather than a separate hand-maintained trace.
+    appended to the native log and applied to graph state. The same ``project``
+    method is reused by ``rebuild_ui_projection`` to re-derive the tables from
+    the stored log.
 
     Event handling:
       * ``object.created``  -> upsert graph_objects (scoped id) + emit an
@@ -157,7 +220,7 @@ class PostgresMirror:
     # loop, so failures are caught and surfaced as a mirror.error event.
     def __call__(self, event) -> None:
         try:
-            self._handle(event)
+            self.project(event)
         except Exception as exc:  # pragma: no cover - defensive
             try:
                 self._record(
@@ -210,7 +273,14 @@ class PostgresMirror:
 
     # ---- dispatch ----
 
-    def _handle(self, event) -> None:
+    def project(self, event) -> None:
+        """Project a single runtime event into the UI read-model tables.
+
+        Pure function of the event (plus current graph state, for framework
+        field-patches) — the live listener and the ``rebuild_ui_projection``
+        replay path both call this, so the projection is identical whether it
+        runs live or is reconstructed from the native store.
+        """
         etype = event.type
         payload = event.payload or {}
 
@@ -288,6 +358,40 @@ class PostgresMirror:
 
     def _scoped_id(self, local_id: str) -> str:
         return _scoped(self._run_id, local_id)
+
+
+def rebuild_ui_projection(app_conn, store, run_id: str) -> int:
+    """Re-derive a run's UI tables purely from ActiveGraph's native event store.
+
+    This is the concrete payoff of attaching the native store: the UI tables are
+    a projection, so we can throw them away and reconstruct them byte-for-byte
+    from the framework's authoritative log. Same mechanism a true fork/replay
+    would use (``Runtime.load`` / ``Runtime.fork`` replay the log; this replays
+    it through the UI projection).
+
+    Replays the stored events into a fresh ``Graph`` (so the framework
+    field-patch branch can read post-patch object state) and feeds each event
+    through ``PostgresMirror.project``. Returns the number of events replayed.
+    """
+    from activegraph import Graph
+
+    # Fresh graph carries object/relation state as we walk the log; it is NOT
+    # persisted (we never attach a store to it) and fires no behaviors.
+    graph = Graph()
+
+    with app_conn.cursor() as cur:
+        cur.execute("DELETE FROM agent_events WHERE run_id = %s", (run_id,))
+        cur.execute("DELETE FROM graph_objects WHERE run_id = %s", (run_id,))
+        cur.execute("DELETE FROM graph_relations WHERE run_id = %s", (run_id,))
+    app_conn.commit()
+
+    mirror = PostgresMirror(app_conn, run_id, graph)
+    n = 0
+    for ev in store.iter_events():
+        graph._replay_event(ev)  # noqa: SLF001 — framework's blessed replay seam
+        mirror.project(ev)
+        n += 1
+    return n
 
 
 def _emit_event(graph, event_type: str, payload: dict, actor: str = "system"):
@@ -564,8 +668,19 @@ def run_with_activegraph(run_id: str, goal: str, work_dir: str, conn, repo_url: 
 
     graph = Graph()
 
-    # The single bridge: one listener mirrors the runtime's event stream into the
-    # UI tables. Registered before the runtime so it observes every event.
+    # Authoritative log: attach ActiveGraph's native PostgresEventStore so the
+    # runtime durably persists every event it emits (Graph.emit -> store.append)
+    # to the framework's own schema-versioned, forkable, replayable tables. Must
+    # be attached BEFORE any event is emitted. Best-effort: if the optional
+    # store dependency is missing the run still proceeds on the UI projection.
+    native_store, native_store_conn = _open_native_store(run_id)
+    if native_store is not None:
+        graph.attach_store(native_store)
+
+    # UI read-model: one listener PROJECTS the runtime's event stream into the
+    # denormalized tables the UI reads. Registered before the runtime so it
+    # observes every event. This is a downstream view of the authoritative log
+    # above — not a parallel source of truth (see PostgresMirror docstring).
     mirror = PostgresMirror(conn, run_id, graph)
     graph.add_listener(mirror)
 
@@ -735,23 +850,32 @@ def run_with_activegraph(run_id: str, goal: str, work_dir: str, conn, repo_url: 
     budget = {"max_events": 500, "max_seconds": 300}
     runtime = Runtime(graph, budget=budget, llm_provider=llm_provider)
 
-    # ── Git: clone + branch before the task loop ──────────────────────────────
-    branch_name: str | None = None
-    if repo_url:
-        branch_name, ok = _git_clone_and_branch(run_id, repo_url, work_dir, conn, graph)
-        if not ok:
-            raise RuntimeError("git clone or branch creation failed — see tool.error events")
+    try:
+        # ── Git: clone + branch before the task loop ──────────────────────────
+        branch_name: str | None = None
+        if repo_url:
+            branch_name, ok = _git_clone_and_branch(run_id, repo_url, work_dir, conn, graph)
+            if not ok:
+                raise RuntimeError("git clone or branch creation failed — see tool.error events")
 
-    _emit_event(graph, "run.started", {"run_id": run_id, "goal": goal})
-    runtime.run_goal(goal)
+        _emit_event(graph, "run.started", {"run_id": run_id, "goal": goal})
+        runtime.run_goal(goal)
 
-    # ── Git: commit changes locally after the task loop ───────────────────────
-    # The commit is pushed to the remote by the API server via the GitHub REST
-    # API. A commit failure is logged via tool.error but does NOT fail the run.
-    if repo_url and branch_name:
-        _git_commit(run_id, goal, branch_name, work_dir, conn, graph)
+        # ── Git: commit changes locally after the task loop ───────────────────
+        # The commit is pushed to the remote by the API server via the GitHub
+        # REST API. A commit failure is logged via tool.error but does NOT fail
+        # the run.
+        if repo_url and branch_name:
+            _git_commit(run_id, goal, branch_name, work_dir, conn, graph)
 
-    _emit_event(graph, "run.completed", {"run_id": run_id})
+        _emit_event(graph, "run.completed", {"run_id": run_id})
+    finally:
+        # The native store owns its own connection; close it once the run ends.
+        if native_store_conn is not None:
+            try:
+                native_store_conn.close()
+            except Exception:
+                pass
 
 
 def _run_demo_mode(bgraph, task_id, task_description, work_dir):
@@ -1148,10 +1272,42 @@ def _run_openai_loop(bgraph, task_id, task_description, work_dir, system_prompt)
 def main():
     parser = argparse.ArgumentParser(description="AG Coder runner")
     parser.add_argument("--run-id", required=True, help="Run ID")
-    parser.add_argument("--goal", required=True, help="Agent goal")
+    parser.add_argument("--goal", default=None, help="Agent goal (required unless --rebuild-projection)")
     parser.add_argument("--work-dir", default=".", help="Working directory")
     parser.add_argument("--repo-url", default=None, help="Optional GitHub repo URL to clone, branch, and PR")
+    parser.add_argument(
+        "--rebuild-projection",
+        action="store_true",
+        help=(
+            "Don't run the agent: rebuild the UI projection tables for --run-id "
+            "purely from ActiveGraph's native event store. Demonstrates that the "
+            "UI tables are a derived view of the framework's authoritative log."
+        ),
+    )
     args = parser.parse_args()
+
+    # ── Rebuild mode: re-project an existing run from the native store ─────────
+    if args.rebuild_projection:
+        store, store_conn = _open_native_store(args.run_id)
+        if store is None:
+            print(
+                "Cannot rebuild: native ActiveGraph PostgresEventStore is "
+                "unavailable (missing psycopg 3 / activegraph[postgres], or no "
+                "DATABASE_URL).",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        app_conn = get_conn()
+        try:
+            n = rebuild_ui_projection(app_conn, store, args.run_id)
+            print(f"Rebuilt UI projection for run {args.run_id} from {n} stored events.")
+        finally:
+            app_conn.close()
+            store_conn.close()
+        return
+
+    if not args.goal:
+        parser.error("--goal is required unless --rebuild-projection is set")
 
     # Disable interactive git credential prompts. GIT_ASKPASS (Replit's
     # replit-git-askpass) has no TTY in a detached subprocess and would cause
