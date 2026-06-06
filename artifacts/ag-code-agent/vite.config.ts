@@ -17,6 +17,11 @@ if (Number.isNaN(port) || port <= 0) {
 
 const basePath = process.env.BASE_PATH ?? "/";
 
+// Where the dev server forwards /api. Defaults to the API server's default port
+// (8080) so a plain `pnpm dev` works with zero config. Override with
+// API_PROXY_TARGET if the API runs elsewhere.
+const apiProxyTarget = process.env.API_PROXY_TARGET ?? "http://localhost:8080";
+
 export default defineConfig({
   base: basePath,
   plugins: [
@@ -59,8 +64,18 @@ export default defineConfig({
     // routes /api before requests reach Vite, so this is inert there.
     proxy: {
       "/api": {
-        target: process.env.API_PROXY_TARGET ?? "http://localhost:8080",
+        target: apiProxyTarget,
         changeOrigin: true,
+        // Fail loudly: without this, an unreachable API silently surfaces as a
+        // bare "Cannot GET /api/..." in the browser. Make the real cause obvious.
+        configure: (proxy) => {
+          proxy.on("error", (err) => {
+            console.error(
+              `[vite] /api proxy error — is the API server running at ${apiProxyTarget}? ` +
+                `Start it with \`pnpm dev\` (root) or set API_PROXY_TARGET. (${err.message})`,
+            );
+          });
+        },
       },
     },
   },

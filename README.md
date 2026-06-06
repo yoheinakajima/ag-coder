@@ -136,6 +136,15 @@ pnpm run check
 
 ### 4. Start the servers
 
+The quickest path is one command from the repo root, which starts the API server
+and the frontend together:
+
+```bash
+pnpm dev
+```
+
+Or run them in separate terminals if you prefer isolated logs:
+
 ```bash
 # Terminal 1 — API
 pnpm --filter @workspace/api-server run dev
@@ -144,9 +153,16 @@ pnpm --filter @workspace/api-server run dev
 pnpm --filter @workspace/ag-code-agent run dev
 ```
 
-Then open the frontend in your browser (Vite prints the URL on startup). In local
-dev the frontend proxies `/api` to the API server, so a plain `pnpm dev` works
-without any extra proxy setup.
+Then **open the frontend's URL** (Vite prints it on startup) — _not_ the API
+server's. The API serves JSON only and has no homepage; visiting it directly just
+returns an info payload. In local dev the frontend proxies `/api` to the API
+server, so no extra proxy setup is needed.
+
+> **Ports:** the API listens on `8080` by default and the frontend's dev proxy
+> targets `8080` to match, so they line up out of the box. Override with `PORT`
+> (API) and `API_PROXY_TARGET` (frontend) if those defaults conflict — see
+> [`.env.example`](./.env.example). If the frontend can't reach the API, Vite
+> logs a clear `/api proxy error` instead of failing silently.
 
 ---
 
