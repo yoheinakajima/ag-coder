@@ -24,6 +24,13 @@ psycopg[binary]>=3.1,<4
 # framework store's psycopg 3 connection; the two never share a connection.
 psycopg2-binary>=2.9,<3
 
+# Test runner for the agent's verification step. The `test_runner` behavior
+# prefers pytest when it's importable; if it's absent the agent falls back to the
+# stdlib `python3 -m unittest discover`, so this is recommended but not strictly
+# required. Without it (and with no pytest already on the path), pytest-only test
+# files won't be collected and the run would otherwise misreport test status.
+pytest>=8,<9
+
 # Optional: enables ActiveGraph's PrometheusMetrics backend (the runtime feeds
 # it counters/histograms/gauges). Without it the agent falls back to NoOpMetrics
 # and the runtime.status() snapshot (ops.status event) still works. Safe to omit.

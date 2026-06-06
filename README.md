@@ -102,6 +102,13 @@ Requirements:
 - **PostgreSQL**
 - The Python agent's dependencies (`pip install -r scripts/agent/requirements.txt`)
 
+> **Behind a package firewall** (e.g. some sandboxes block packages below a
+> minimum age): if a single dev dependency is blocked, pnpm can abort the whole
+> install and leave filtered workspaces without their local `node_modules`. Once
+> the package is reachable, re-running `pnpm install` (or installing per-package
+> with `pnpm --filter <pkg> install`) links the rest. This doesn't happen on a
+> standard machine.
+
 ### 2. Set up environment variables
 
 Copy the example file and fill in your values:
@@ -113,12 +120,14 @@ cp .env.example .env
 | Variable             | Required        | Description                                                                                                   |
 | -------------------- | --------------- | ------------------------------------------------------------------------------------------------------------- |
 | `DATABASE_URL`       | ✅ **required** | Postgres connection string                                                                                    |
-| `ANTHROPIC_API_KEY`  | optional        | Enables the Anthropic-powered agent (takes priority if both are set)                                          |
-| `OPENAI_API_KEY`     | optional        | Enables the OpenAI-powered agent                                                                              |
+| `ANTHROPIC_API_KEY`  | optional        | Enables the Anthropic-powered agent (takes priority if both are set). **Required for live code-writing.**     |
+| `OPENAI_API_KEY`     | optional        | Recognized, but live code-writing needs Anthropic — the pinned runtime can't do tool use on OpenAI yet        |
 | `SESSION_SECRET`     | optional        | Express session secret (auto-generated if omitted)                                                            |
 | `AGENT_MAX_COST_USD` | optional        | Per-run LLM cost ceiling (default `1.00`); the runtime stops with `budget.cost_exhausted` before exceeding it |
 
 > If neither `ANTHROPIC_API_KEY` nor `OPENAI_API_KEY` is set, the agent runs in deterministic **demo mode**.
+>
+> For live runs that actually write code, use **Anthropic**. The agent is fully tool-driven, and the pinned `activegraph` runtime can't do tool use on OpenAI yet, so an OpenAI-only live run fails at its first tool call.
 
 ### 3. Push the database schema
 
@@ -136,6 +145,15 @@ pnpm run check
 
 ### 4. Start the servers
 
+The quickest path is one command from the repo root, which starts the API server
+and the frontend together:
+
+```bash
+pnpm dev
+```
+
+Or run them in separate terminals if you prefer isolated logs:
+
 ```bash
 # Terminal 1 — API
 pnpm --filter @workspace/api-server run dev
@@ -144,9 +162,16 @@ pnpm --filter @workspace/api-server run dev
 pnpm --filter @workspace/ag-code-agent run dev
 ```
 
-Then open the frontend in your browser (Vite prints the URL on startup). In local
-dev the frontend proxies `/api` to the API server, so a plain `pnpm dev` works
-without any extra proxy setup.
+Then **open the frontend's URL** (Vite prints it on startup) — _not_ the API
+server's. The API serves JSON only and has no homepage; visiting it directly just
+returns an info payload. In local dev the frontend proxies `/api` to the API
+server, so no extra proxy setup is needed.
+
+> **Ports:** the API listens on `8080` by default and the frontend's dev proxy
+> targets `8080` to match, so they line up out of the box. Override with `PORT`
+> (API) and `API_PROXY_TARGET` (frontend) if those defaults conflict — see
+> [`.env.example`](./.env.example). If the frontend can't reach the API, Vite
+> logs a clear `/api proxy error` instead of failing silently.
 
 ---
 

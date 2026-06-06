@@ -63,12 +63,34 @@ async function checkPython(): Promise<void> {
     fail("Python deps missing — run: pip install -r scripts/agent/requirements.txt");
     hardFailures++;
   }
+
+  // Soft check: pytest is preferred but optional — the agent falls back to the
+  // stdlib unittest runner when it's absent (so this is a warning, not a failure).
+  try {
+    await execFileAsync("python3", ["-c", "import pytest"]);
+    ok("pytest available (preferred test runner)");
+  } catch {
+    warn(
+      "pytest not installed — the agent will fall back to `unittest discover`. " +
+        "Install with: pip install -r scripts/agent/requirements.txt",
+    );
+  }
 }
 
 function checkLlmMode(): void {
-  if (process.env["ANTHROPIC_API_KEY"]) ok("ANTHROPIC_API_KEY set — live agent (Anthropic)");
-  else if (process.env["OPENAI_API_KEY"]) ok("OPENAI_API_KEY set — live agent (OpenAI)");
-  else warn("No LLM key set — agent runs in deterministic demo mode");
+  if (process.env["ANTHROPIC_API_KEY"]) {
+    ok("ANTHROPIC_API_KEY set — live agent (Anthropic)");
+  } else if (process.env["OPENAI_API_KEY"]) {
+    // The agent is entirely tool-driven (read/write/bash), and the pinned
+    // activegraph runtime can't do tool use on OpenAI yet — so OpenAI-only live
+    // runs fail at the first tool call. Anthropic is required for code-writing.
+    warn(
+      "OPENAI_API_KEY set, but live code-writing currently requires Anthropic — " +
+        "the pinned runtime can't do tool use on OpenAI yet. Set ANTHROPIC_API_KEY.",
+    );
+  } else {
+    warn("No LLM key set — agent runs in deterministic demo mode");
+  }
 }
 
 async function main(): Promise<void> {

@@ -19,8 +19,10 @@ import difflib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 import traceback
 import uuid
 from dataclasses import dataclass
@@ -767,7 +769,28 @@ def _git_clone_and_branch(run_id: str, repo_url: str, work_dir: str, conn, graph
             )
 
         _emit_event(graph, "tool.called", {"tool": "git_clone", "input": {"repo_url": repo_url, "dir": "."}})
-        clone_result = _run_git_cmd(["clone", clone_url, "."], cwd=work_dir, timeout=180)
+
+        # `git clone <url> .` requires an EMPTY directory, but by the time we get
+        # here the agent has already written .ag-agent.log (and possibly
+        # .ag-metrics.prom) into work_dir. When work_dir is non-empty, clone into
+        # a temp subdir and lift the result up — preserving full clone semantics
+        # (default branch, remote tracking, history) without the "destination
+        # path '.' already exists and is not an empty directory" failure. This
+        # makes direct/CLI invocation work, not just the API-orchestrated path.
+        if os.listdir(work_dir):
+            tmp_clone = tempfile.mkdtemp(dir=work_dir, prefix=".ag-clone-")
+            clone_result = _run_git_cmd(["clone", clone_url, tmp_clone], cwd=work_dir, timeout=180)
+            if clone_result.ok:
+                for entry in os.listdir(tmp_clone):
+                    dest = os.path.join(work_dir, entry)
+                    # Don't clobber the agent's own sidecar files (.ag-agent.log,
+                    # .ag-metrics.prom); repo files never collide with those.
+                    if not os.path.exists(dest):
+                        shutil.move(os.path.join(tmp_clone, entry), dest)
+                shutil.rmtree(tmp_clone, ignore_errors=True)
+        else:
+            clone_result = _run_git_cmd(["clone", clone_url, "."], cwd=work_dir, timeout=180)
+
         # Redact any token that might appear in git's output before storing in DB
         safe_output = clone_result.output.replace(github_token, "[REDACTED]") if github_token else clone_result.output
         safe_error = (clone_result.error or "").replace(github_token, "[REDACTED]") if github_token else (clone_result.error or "")
@@ -1392,13 +1415,28 @@ def run_with_activegraph(run_id: str, goal: str, work_dir: str, conn,
             return
 
         bgraph.emit("test.run.requested", {"test_files": test_files.output})
-        is_pytest = "test_" in test_files.output or "_test" in test_files.output
-        if is_pytest:
-            # No pipe to head — preserve real exit code; truncate output in Python.
-            test_result = tool_bash("python3 -m pytest -x --tb=short", cwd=work_dir, timeout=60)
+        is_python = ".py" in test_files.output
+        if is_python:
+            # Prefer pytest, but degrade gracefully to the stdlib unittest runner
+            # when pytest isn't installed. Without this fallback a clean
+            # environment (pytest not in requirements until recently) reports a
+            # false test failure even when the generated code and tests are
+            # correct — which would then wrongly trigger the fix loop.
+            if _pytest_available():
+                framework = "pytest"
+                # No pipe to head — preserve real exit code; truncate in Python.
+                test_result = tool_bash("python3 -m pytest -x --tb=short", cwd=work_dir, timeout=60)
+            else:
+                framework = "unittest"
+                # `-p "*test*.py"` matches both test_*.py and *_test.py naming
+                # (the default discover pattern, test*.py, misses *_test.py).
+                test_result = tool_bash(
+                    'python3 -m unittest discover -v -p "*test*.py"', cwd=work_dir, timeout=60
+                )
         else:
+            framework = "jest"
             test_result = tool_bash("npx jest --passWithNoTests", cwd=work_dir, timeout=60)
-        counts = _parse_test_output(test_result.output, "pytest" if is_pytest else "jest")
+        counts = _parse_test_output(test_result.output, framework)
         status = "passed" if test_result.ok and counts["failed"] == 0 else "failed"
 
         test_node = bgraph.add_object("test_run", {
@@ -1717,12 +1755,43 @@ def _run_demo_mode(bgraph, task_id, task_description, work_dir):
     })
 
 
+def _pytest_available() -> bool:
+    """True when pytest can be imported by the agent's interpreter.
+
+    Used by the test_runner to decide between `python3 -m pytest` and the stdlib
+    `python3 -m unittest discover` fallback. pytest is recommended (see
+    requirements.txt) but optional, so we probe at runtime rather than assume it.
+    """
+    return tool_bash("python3 -c \"import pytest\"").ok
+
+
 def _parse_test_output(output: str, framework: str) -> dict:
-    """Extract passed/failed/total counts from pytest or jest output."""
+    """Extract passed/failed/total counts from pytest, unittest, or jest output."""
     passed = 0
     failed = 0
     total = 0
-    if framework == "pytest":
+    if framework == "unittest":
+        # Stdlib unittest summary, e.g.:
+        #   Ran 17 tests in 0.001s
+        #
+        #   OK
+        # or:
+        #   FAILED (failures=2, errors=1)
+        m = re.search(r"Ran (\d+) test", output)
+        if m:
+            total = int(m.group(1))
+        fm = re.search(r"failures=(\d+)", output)
+        if fm:
+            failed += int(fm.group(1))
+        em = re.search(r"errors=(\d+)", output)
+        if em:
+            failed += int(em.group(1))
+        # When there's no explicit FAILED breakdown but the run wasn't OK, treat
+        # all collected tests as failed so status reporting stays conservative.
+        if failed == 0 and "FAILED" in output and total:
+            failed = total
+        passed = max(total - failed, 0)
+    elif framework == "pytest":
         m = re.search(r"(\d+) passed", output)
         if m:
             passed = int(m.group(1))

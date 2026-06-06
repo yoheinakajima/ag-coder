@@ -2,11 +2,10 @@ import app from "./app";
 import { logger } from "./lib/logger";
 import { logGitHubConnectionStatus } from "./github-client";
 
-const rawPort = process.env["PORT"];
-
-if (!rawPort) {
-  throw new Error("PORT environment variable is required but was not provided.");
-}
+// Default to 8080 when PORT is unset — this is the single source-of-truth dev
+// port the frontend's Vite proxy also targets by default (API_PROXY_TARGET), so
+// `pnpm dev` works with zero config. Deployments set PORT explicitly.
+const rawPort = process.env["PORT"] ?? "8080";
 
 const port = Number(rawPort);
 
