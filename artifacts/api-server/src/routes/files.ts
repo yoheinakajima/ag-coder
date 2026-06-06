@@ -5,7 +5,17 @@ import path from "path";
 const router = Router();
 
 const WORKSPACE_ROOT = process.cwd();
-const IGNORED = new Set(["node_modules", ".git", "dist", "build", ".next", ".cache", "coverage", ".tsbuildinfo", "pnpm-lock.yaml"]);
+const IGNORED = new Set([
+  "node_modules",
+  ".git",
+  "dist",
+  "build",
+  ".next",
+  ".cache",
+  "coverage",
+  ".tsbuildinfo",
+  "pnpm-lock.yaml",
+]);
 
 function buildFileTree(dirPath: string, rootPath: string, depth = 0): object[] {
   if (depth > 5) return [];
@@ -13,7 +23,8 @@ function buildFileTree(dirPath: string, rootPath: string, depth = 0): object[] {
   const result: object[] = [];
 
   for (const entry of entries) {
-    if (IGNORED.has(entry.name) || entry.name.startsWith(".") && entry.name !== ".env.example") continue;
+    if (IGNORED.has(entry.name) || (entry.name.startsWith(".") && entry.name !== ".env.example"))
+      continue;
     const fullPath = path.join(dirPath, entry.name);
     const relPath = path.relative(rootPath, fullPath);
 
@@ -46,10 +57,22 @@ function buildFileTree(dirPath: string, rootPath: string, depth = 0): object[] {
 function detectLanguage(filename: string): string | null {
   const ext = path.extname(filename).toLowerCase();
   const map: Record<string, string> = {
-    ".ts": "typescript", ".tsx": "tsx", ".js": "javascript", ".jsx": "jsx",
-    ".py": "python", ".md": "markdown", ".json": "json", ".yaml": "yaml",
-    ".yml": "yaml", ".sh": "bash", ".css": "css", ".html": "html",
-    ".sql": "sql", ".toml": "toml", ".env": "dotenv", ".txt": "text",
+    ".ts": "typescript",
+    ".tsx": "tsx",
+    ".js": "javascript",
+    ".jsx": "jsx",
+    ".py": "python",
+    ".md": "markdown",
+    ".json": "json",
+    ".yaml": "yaml",
+    ".yml": "yaml",
+    ".sh": "bash",
+    ".css": "css",
+    ".html": "html",
+    ".sql": "sql",
+    ".toml": "toml",
+    ".env": "dotenv",
+    ".txt": "text",
   };
   return map[ext] ?? null;
 }

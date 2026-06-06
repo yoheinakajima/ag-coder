@@ -84,27 +84,16 @@ pnpm --filter @workspace/db run push
 
 ## Before opening a pull request
 
-Run the checks CI runs — typecheck and tests:
+Run the checks CI runs — formatting, typecheck, tests, and a build:
 
 ```bash
+pnpm run format:check   # or `pnpm run format` to auto-fix
 pnpm run typecheck
 pnpm run test
+pnpm run build
 ```
 
-CI (`.github/workflows/ci.yml`) runs these on every push and pull request.
-
-Building the apps additionally requires the frontend's `PORT` and `BASE_PATH`
-env vars (used by `artifacts/ag-code-agent/vite.config.ts`):
-
-```bash
-PORT=5000 BASE_PATH=/ pnpm run build
-```
-
-Formatting is Prettier-based; please run it on the files you touch:
-
-```bash
-pnpm run format        # or `pnpm run format:check` to verify
-```
+CI (`.github/workflows/ci.yml`) runs all of these on every push and pull request.
 
 Guidelines:
 

@@ -14,5 +14,5 @@ export const PREFERRED_MODEL_KEY = "ag_preferred_model";
  */
 export function getModelLabel(model: string | null | undefined): string | null {
   if (!model || model === "demo" || model === "default") return null;
-  return MODEL_OPTIONS.find(o => o.value === model)?.label ?? model;
+  return MODEL_OPTIONS.find((o) => o.value === model)?.label ?? model;
 }

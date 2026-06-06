@@ -26,7 +26,12 @@ export function parseUnifiedDiff(diff: string): Row[] {
   };
 
   for (const line of lines) {
-    if (line.startsWith("+++") || line.startsWith("---") || line.startsWith("diff ") || line.startsWith("index ")) {
+    if (
+      line.startsWith("+++") ||
+      line.startsWith("---") ||
+      line.startsWith("diff ") ||
+      line.startsWith("index ")
+    ) {
       continue;
     }
     if (line.startsWith("@@")) {
@@ -59,10 +64,14 @@ export function parseUnifiedDiff(diff: string): Row[] {
 
 function cellClass(kind: Side["kind"]): string {
   switch (kind) {
-    case "add": return "bg-green-500/10 text-green-300";
-    case "del": return "bg-red-500/10 text-red-300";
-    case "empty": return "bg-muted/20";
-    default: return "text-foreground/70";
+    case "add":
+      return "bg-green-500/10 text-green-300";
+    case "del":
+      return "bg-red-500/10 text-red-300";
+    case "empty":
+      return "bg-muted/20";
+    default:
+      return "text-foreground/70";
   }
 }
 
@@ -80,9 +89,7 @@ function SideCell({ side }: { side: Side }) {
 export function SplitDiffView({ diff }: { diff: string }) {
   if (!diff.trim()) {
     return (
-      <div className="p-4 font-mono text-xs text-muted-foreground">
-        No changes (empty diff).
-      </div>
+      <div className="p-4 font-mono text-xs text-muted-foreground">No changes (empty diff).</div>
     );
   }
   const rows = parseUnifiedDiff(diff);
@@ -91,7 +98,10 @@ export function SplitDiffView({ diff }: { diff: string }) {
       <div className="text-[11px] font-mono leading-relaxed min-w-max">
         {rows.map((row, i) =>
           row.hunk ? (
-            <div key={i} className="text-blue-400 bg-blue-500/5 px-3 py-0.5 border-y border-border/20">
+            <div
+              key={i}
+              className="text-blue-400 bg-blue-500/5 px-3 py-0.5 border-y border-border/20"
+            >
               {row.hunk}
             </div>
           ) : (
@@ -99,7 +109,7 @@ export function SplitDiffView({ diff }: { diff: string }) {
               <SideCell side={row.left} />
               <SideCell side={row.right} />
             </div>
-          )
+          ),
         )}
       </div>
     </div>

@@ -21,7 +21,7 @@ export interface ElapsedInfo {
 
 export function useElapsedInfo(
   startedAt: string | null | undefined,
-  endedAt: string | null | undefined
+  endedAt: string | null | undefined,
 ): ElapsedInfo {
   const [now, setNow] = useState(() => Date.now());
 
@@ -44,7 +44,7 @@ export function useElapsedInfo(
 
 export function useElapsedTime(
   startedAt: string | null | undefined,
-  endedAt: string | null | undefined
+  endedAt: string | null | undefined,
 ): string | null {
   return useElapsedInfo(startedAt, endedAt).text;
 }

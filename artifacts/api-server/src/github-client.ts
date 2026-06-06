@@ -39,7 +39,9 @@ export async function githubRequest<T = unknown>(
 ): Promise<T> {
   const fetchOptions = {
     method,
-    ...(body ? { body: JSON.stringify(body), headers: { "Content-Type": "application/json" } } : {}),
+    ...(body
+      ? { body: JSON.stringify(body), headers: { "Content-Type": "application/json" } }
+      : {}),
   };
 
   // ── 1. Try Replit connector proxy ──────────────────────────────────────────
@@ -149,9 +151,7 @@ export async function getGitHubAccessToken(): Promise<string | null> {
  * Used by logGitHubConnectionStatus to report the active method at startup.
  */
 async function detectGitHubAuthMethod(): Promise<
-  | { method: "connector"; login: string }
-  | { method: "token"; login: string }
-  | { method: "none" }
+  { method: "connector"; login: string } | { method: "token"; login: string } | { method: "none" }
 > {
   // Try connector first (without falling through to token, so we can tell them apart)
   try {
@@ -196,9 +196,15 @@ async function detectGitHubAuthMethod(): Promise<
 export async function logGitHubConnectionStatus(): Promise<void> {
   const result = await detectGitHubAuthMethod();
   if (result.method === "connector") {
-    logger.info({ githubLogin: result.login, authMethod: "connector" }, "GitHub auth ready (Replit connector)");
+    logger.info(
+      { githubLogin: result.login, authMethod: "connector" },
+      "GitHub auth ready (Replit connector)",
+    );
   } else if (result.method === "token") {
-    logger.info({ githubLogin: result.login, authMethod: "token" }, "GitHub auth ready (GITHUB_TOKEN)");
+    logger.info(
+      { githubLogin: result.login, authMethod: "token" },
+      "GitHub auth ready (GITHUB_TOKEN)",
+    );
   } else {
     logger.warn(
       "GitHub auth unavailable — repo-backed runs will skip push/PR. " +
@@ -343,7 +349,10 @@ export async function pushBranchViaApi(params: {
   } catch {
     nameStatus = git(["show", "--name-status", "--format=", "HEAD"]);
   }
-  const lines = nameStatus.split("\n").map((l) => l.trim()).filter(Boolean);
+  const lines = nameStatus
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean);
   if (!lines.length) return { ok: false, reason: "agent commit has no file changes" };
 
   // Map each tracked file to its git mode (preserves the executable bit).

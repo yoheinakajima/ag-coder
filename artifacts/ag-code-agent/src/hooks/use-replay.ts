@@ -46,22 +46,25 @@ export function useReplay(events: AgentEvent[], enabled: boolean): UseReplayRetu
     setIsPlaying(false);
   }, [stopPlay]);
 
-  const stepTo = useCallback((index: number) => {
-    stopPlay();
-    setReplayIndex(clamp(index));
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [stopPlay, events.length]);
+  const stepTo = useCallback(
+    (index: number) => {
+      stopPlay();
+      setReplayIndex(clamp(index));
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    },
+    [stopPlay, events.length],
+  );
 
   const stepPrev = useCallback(() => {
     stopPlay();
-    setReplayIndex(prev => clamp(prev - 1));
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    setReplayIndex((prev) => clamp(prev - 1));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stopPlay, events.length]);
 
   const stepNext = useCallback(() => {
     stopPlay();
-    setReplayIndex(prev => clamp(prev + 1));
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    setReplayIndex((prev) => clamp(prev + 1));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stopPlay, events.length]);
 
   const togglePlay = useCallback(() => {
@@ -71,13 +74,13 @@ export function useReplay(events: AgentEvent[], enabled: boolean): UseReplayRetu
     }
     if (events.length === 0) return;
     // If at the end, restart from beginning
-    setReplayIndex(prev => {
+    setReplayIndex((prev) => {
       const start = prev >= events.length - 1 ? 0 : prev;
       return start;
     });
     setIsPlaying(true);
     playTimerRef.current = setInterval(() => {
-      setReplayIndex(prev => {
+      setReplayIndex((prev) => {
         const next = prev + 1;
         if (next >= events.length) {
           clearInterval(playTimerRef.current!);

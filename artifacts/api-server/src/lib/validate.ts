@@ -33,10 +33,5 @@ export function isValidRepoUrl(value: string): boolean {
   const repo = repoRaw.replace(/\.git$/, "");
   const namePattern = /^[A-Za-z0-9._-]+$/;
 
-  return (
-    owner.length > 0 &&
-    repo.length > 0 &&
-    namePattern.test(owner) &&
-    namePattern.test(repo)
-  );
+  return owner.length > 0 && repo.length > 0 && namePattern.test(owner) && namePattern.test(repo);
 }

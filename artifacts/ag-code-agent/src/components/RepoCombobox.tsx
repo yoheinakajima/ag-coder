@@ -30,7 +30,11 @@ export function RepoCombobox({ value, onChange, disabled }: RepoComboboxProps) {
     return () => clearTimeout(t);
   }, [search]);
 
-  const { data: recentData, isError, isLoading } = useGetGithubRepos(undefined, {
+  const {
+    data: recentData,
+    isError,
+    isLoading,
+  } = useGetGithubRepos(undefined, {
     query: queryConfig({ staleTime: 60_000, retry: false }),
   });
 
@@ -53,13 +57,10 @@ export function RepoCombobox({ value, onChange, disabled }: RepoComboboxProps) {
 
   const baseRepos = recentData?.repos ?? [];
   const repos = debouncedSearch
-    ? (searchData?.repos ?? baseRepos.filter((r) =>
-        r.fullName.toLowerCase().includes(search.toLowerCase()),
-      ))
+    ? (searchData?.repos ??
+      baseRepos.filter((r) => r.fullName.toLowerCase().includes(search.toLowerCase())))
     : search
-      ? baseRepos.filter((r) =>
-          r.fullName.toLowerCase().includes(search.toLowerCase()),
-        )
+      ? baseRepos.filter((r) => r.fullName.toLowerCase().includes(search.toLowerCase()))
       : baseRepos;
 
   const allKnown = [...baseRepos, ...(searchData?.repos ?? [])];
@@ -67,9 +68,7 @@ export function RepoCombobox({ value, onChange, disabled }: RepoComboboxProps) {
   const displayValue = selectedRepo?.fullName ?? value ?? null;
 
   const showCustomUrl =
-    !!search &&
-    search.startsWith("https://") &&
-    !repos.some((r) => r.htmlUrl === search);
+    !!search && search.startsWith("https://") && !repos.some((r) => r.htmlUrl === search);
 
   const handleSelect = (htmlUrl: string) => {
     onChange(htmlUrl);
@@ -139,10 +138,7 @@ export function RepoCombobox({ value, onChange, disabled }: RepoComboboxProps) {
 
             {showCustomUrl && (
               <CommandGroup>
-                <CommandItem
-                  value={search}
-                  onSelect={() => handleSelect(search.trim())}
-                >
+                <CommandItem value={search} onSelect={() => handleSelect(search.trim())}>
                   <Github className="mr-2 h-3.5 w-3.5 opacity-70 shrink-0" />
                   <span className="font-mono text-sm truncate">Use &ldquo;{search}&rdquo;</span>
                 </CommandItem>
