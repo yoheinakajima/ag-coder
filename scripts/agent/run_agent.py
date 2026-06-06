@@ -1275,8 +1275,35 @@ def run_with_activegraph(run_id: str, goal: str, work_dir: str, conn,
         bgraph.emit("task.created", {"task_id": fix_task.id, "title": fix_task.data["title"]})
         bgraph.emit("task.ready", {"task_id": fix_task.id})
 
+    # ── Frame: the run's mission context (goal + constraints + success criteria).
+    # Attaching a Frame stamps frame_id provenance on every object/relation/event
+    # the runtime creates, so the whole run is tagged with the mission it served.
+    from activegraph import Frame
+    frame = Frame(
+        goal=goal,
+        constraints=[
+            "Never modify .env, .git/, node_modules/, or package-lock.json",
+            "Do not run git commands — commit/push is handled after the run",
+            "Prefer focused edits over large rewrites",
+        ],
+        success_criteria=[
+            "The requested change is implemented",
+            "Any project tests still pass",
+        ],
+    )
+
+    # ── Budget: hard ceilings. max_cost_usd adds real token-based cost gating —
+    # the runtime estimates each LLM call's cost before spending and stops the run
+    # if it would exceed the ceiling (CONTRACT v0.6 #9). Configurable via env.
     budget = {"max_events": 500, "max_seconds": 300}
-    runtime = Runtime(graph, budget=budget, llm_provider=llm_provider,
+    try:
+        _cost_cap = float(os.environ.get("AGENT_MAX_COST_USD", "1.00"))
+        if _cost_cap > 0:
+            budget["max_cost_usd"] = _cost_cap
+    except (TypeError, ValueError):
+        pass
+
+    runtime = Runtime(graph, budget=budget, frame=frame, llm_provider=llm_provider,
                       tools=runtime_tools, **replay_caches)
 
     try:
