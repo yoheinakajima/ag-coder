@@ -38,7 +38,11 @@ export function CausalChainPanel({
       </div>
       <div className="px-4 pb-3">
         {isLoading && <div className="text-xs text-muted-foreground">Computing chain…</div>}
-        {isError && <div className="text-xs text-destructive">Couldn’t compute the causal chain for this object.</div>}
+        {isError && (
+          <div className="text-xs text-destructive">
+            Couldn’t compute the causal chain for this object.
+          </div>
+        )}
         {data?.chain && (
           <pre className="text-[11px] leading-relaxed font-mono whitespace-pre-wrap text-foreground/90 bg-muted/30 rounded-md p-3 overflow-x-auto">
             {data.chain}

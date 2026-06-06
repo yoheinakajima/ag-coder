@@ -19,7 +19,9 @@ When contributing, please preserve the three things that make it what it is:
 ## Prerequisites
 
 - Node.js 24+ and [pnpm](https://pnpm.io/)
-- Python 3 with `psycopg2` and `activegraph` available on the path (used by the agent subprocess)
+- Python 3 with the agent deps installed (`pip install -r scripts/agent/requirements.txt` —
+  `activegraph[postgres]` brings psycopg 3 for the framework's event store; `psycopg2`
+  backs the app's projection tables)
 - A PostgreSQL database
 
 ## Getting started
@@ -82,16 +84,27 @@ pnpm --filter @workspace/db run push
 
 ## Before opening a pull request
 
-Run the typecheck, tests, and formatting check — these mirror what CI runs:
+Run the checks CI runs — typecheck and tests:
 
 ```bash
 pnpm run typecheck
 pnpm run test
-pnpm run format:check   # or `pnpm run format` to auto-fix
 ```
 
-CI (`.github/workflows/ci.yml`) runs typecheck, tests, and a build on every push
-and pull request.
+CI (`.github/workflows/ci.yml`) runs these on every push and pull request.
+
+Building the apps additionally requires the frontend's `PORT` and `BASE_PATH`
+env vars (used by `artifacts/ag-code-agent/vite.config.ts`):
+
+```bash
+PORT=5000 BASE_PATH=/ pnpm run build
+```
+
+Formatting is Prettier-based; please run it on the files you touch:
+
+```bash
+pnpm run format        # or `pnpm run format:check` to verify
+```
 
 Guidelines:
 

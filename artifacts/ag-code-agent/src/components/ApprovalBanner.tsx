@@ -40,7 +40,8 @@ export function ApprovalBanner({ runId, status }: { runId: string; status?: stri
             Approval required
           </span>
           <span className="text-muted-foreground">
-            {" "}— the agent paused before committing its changes.
+            {" "}
+            — the agent paused before committing its changes.
           </span>
           {pending.map((a) => (
             <div key={a.id} className="text-xs text-foreground/80 mt-1 font-mono">

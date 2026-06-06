@@ -5,8 +5,8 @@ and at the end you get a diff (or an apology). What happened in between — whic
 files it read, what it asked the model, why it chose that edit — is gone, buried
 in a scrollback of log lines if it was captured at all.
 
-**AG Coder** is an experiment in the opposite direction: an agent where *every
-action is a node in a live causal graph*. File reads, writes, bash commands,
+**AG Coder** is an experiment in the opposite direction: an agent where _every
+action is a node in a live causal graph_. File reads, writes, bash commands,
 model calls, patches, test runs — each is an object or event with explicit
 provenance back to the things that caused it. The UI is a developer cockpit: a
 causal graph on the left, the conversation in the center, file changes on the
@@ -17,7 +17,7 @@ This is the deeper technical walkthrough for the [AG Coder](../README.md) repo.
 The interesting part isn't that it edits code — it's how thoroughly it leans on
 [ActiveGraph](https://activegraph.ai)'s own primitives (published on PyPI as
 [`activegraph`](https://pypi.org/project/activegraph/)) so that the audit trail,
-the live UI, and features like fork + replay are all the *same* underlying thing.
+the live UI, and features like fork + replay are all the _same_ underlying thing.
 
 ---
 
@@ -57,7 +57,7 @@ PostgreSQL
 - **Authoritative log:** ActiveGraph's native `PostgresEventStore` is attached to
   the runtime, so every event is durably persisted to the framework's own
   schema-versioned tables (in a dedicated `activegraph` Postgres schema).
-- **UI projection:** one listener (`PostgresMirror`) *projects* that same stream
+- **UI projection:** one listener (`PostgresMirror`) _projects_ that same stream
   into the denormalized tables the UI reads. It's a derived view — it can be
   rebuilt from the authoritative log at any time — not a parallel source of truth.
 
@@ -73,7 +73,7 @@ The coding-agent domain (`plan`, `task`, `patch`, `file_snapshot`, `model_call`,
 `command_result`, `test_run`, …) is declared as an ActiveGraph **Pack**
 (`scripts/agent/coding_pack.py`): `ObjectType`s with Pydantic schemas and
 `RelationType`s with endpoint constraints. Loading it
-(`runtime.load_pack(coding_pack)`) makes the graph *typed* — `add_object("patch",
+(`runtime.load_pack(coding_pack)`) makes the graph _typed_ — `add_object("patch",
 …)` validates against `PatchSchema`, and `add_relation(task, patch,
 "TASK_HAS_PATCH")` is checked against the declared source/target types. Schemas
 use `extra="allow"` so the rich UI fields pass through while the declared fields
@@ -103,7 +103,7 @@ owns the turn loop: it assembles the prompt, calls the provider, emits
 developer handler runs once, at the end, and turns the recorded tool events into
 the graph's `patch` / `file_snapshot` / `command_result` objects.
 
-The payoff is that the LLM and tool activity *is* the trace — typed framework
+The payoff is that the LLM and tool activity _is_ the trace — typed framework
 events with `caused_by` lineage — not a parallel narrative reconstructed by hand.
 
 ### Durable, forkable, replayable — for free
@@ -168,15 +168,15 @@ store. See [operating AG Coder](./operating-ag-coder.md).
 ActiveGraph owns the authoritative log; the UI wants denormalized tables it can
 render and stream. The bridge is a single listener — `PostgresMirror` — that
 projects the runtime's event stream into `agent_events` / `graph_objects` /
-`graph_relations`. The important property is that it's a *pure function of the
-log*: drop those tables and `--rebuild-projection` reconstructs them from the
+`graph_relations`. The important property is that it's a _pure function of the
+log_: drop those tables and `--rebuild-projection` reconstructs them from the
 native store, byte-for-byte. The projection is a read-model, not a competing
 write-path.
 
 There's one sharp edge worth naming: ActiveGraph's projector reserves a few event
 names (`object.*`, `relation.*`, `patch.proposed/applied/rejected`) and owns
 their payload shape. The mirror respects that — it never re-emits those names with
-domain payloads; it *derives* the UI's file-patch events from the `patch` objects
+domain payloads; it _derives_ the UI's file-patch events from the `patch` objects
 and the `tool.responded` events. Let the framework own its event vocabulary and
 translate at the projection boundary.
 
@@ -209,5 +209,5 @@ run in demo mode), and submit a goal. The setup steps are in the
 [tier-2](./tier2-auditability-and-safety.md), and
 [operations](./operating-ag-coder.md) docs.
 
-If you've ever wished your coding agent could *show its work*, this is what that
+If you've ever wished your coding agent could _show its work_, this is what that
 looks like when the work is a graph — and the graph is the framework's.

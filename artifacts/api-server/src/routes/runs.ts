@@ -7,8 +7,20 @@ import { mkdirSync, readdirSync, readFileSync, statSync, existsSync } from "fs";
 import path from "path";
 import { v4 as uuidv4 } from "uuid";
 
-import { db, runsTable, agentEventsTable, graphObjectsTable, graphRelationsTable, agentApprovalsTable } from "@workspace/db";
-import { pushBranchViaApi, createPullRequest, getPullRequestStatus, getGitHubAccessToken } from "../github-client.js";
+import {
+  db,
+  runsTable,
+  agentEventsTable,
+  graphObjectsTable,
+  graphRelationsTable,
+  agentApprovalsTable,
+} from "@workspace/db";
+import {
+  pushBranchViaApi,
+  createPullRequest,
+  getPullRequestStatus,
+  getGitHubAccessToken,
+} from "../github-client.js";
 import { isValidRepoUrl } from "../lib/validate.js";
 import { runCreateRateLimiter } from "../middlewares/rate-limit.js";
 
@@ -35,7 +47,7 @@ type AnyLogger = { info: (...args: unknown[]) => void; warn: (...args: unknown[]
 
 async function createPrAfterRun(runId: string, log: AnyLogger): Promise<void> {
   // Small delay to ensure the agent subprocess has committed its final DB write
-  await new Promise(resolve => setTimeout(resolve, 1500));
+  await new Promise((resolve) => setTimeout(resolve, 1500));
   try {
     const runs = await db.select().from(runsTable).where(eq(runsTable.id, runId)).limit(1);
     const run = runs[0];
@@ -78,7 +90,7 @@ async function createPrAfterRun(runId: string, log: AnyLogger): Promise<void> {
         .select({ maxSeq: sql<number>`MAX(seq)` })
         .from(agentEventsTable)
         .where(eq(agentEventsTable.runId, runId));
-      const nextSeq = (Number(seqRows[0]?.maxSeq ?? 0)) + 1;
+      const nextSeq = Number(seqRows[0]?.maxSeq ?? 0) + 1;
       await db.insert(agentEventsTable).values({
         id: uuidv4(),
         runId,
@@ -87,7 +99,9 @@ async function createPrAfterRun(runId: string, log: AnyLogger): Promise<void> {
         payload: { message: `PR creation failed: ${String(err).slice(0, 300)}` },
         createdAt: new Date(),
       });
-    } catch { /* swallow */ }
+    } catch {
+      /* swallow */
+    }
   }
 }
 
@@ -128,11 +142,22 @@ function buildRunFileTree(dirPath: string, rootPath: string, depth = 0): object[
     const fullPath = path.join(dirPath, entry.name);
     const relPath = path.relative(rootPath, fullPath);
     if (entry.isDirectory()) {
-      result.push({ name: entry.name, path: relPath, type: "directory", size: null,
-        children: buildRunFileTree(fullPath, rootPath, depth + 1) });
+      result.push({
+        name: entry.name,
+        path: relPath,
+        type: "directory",
+        size: null,
+        children: buildRunFileTree(fullPath, rootPath, depth + 1),
+      });
     } else {
       const stat = statSync(fullPath);
-      result.push({ name: entry.name, path: relPath, type: "file", size: stat.size, children: null });
+      result.push({
+        name: entry.name,
+        path: relPath,
+        type: "file",
+        size: stat.size,
+        children: null,
+      });
     }
   }
   return result.sort((a: any, b: any) => {
@@ -144,21 +169,29 @@ function buildRunFileTree(dirPath: string, rootPath: string, depth = 0): object[
 function detectRunFileLanguage(filename: string): string | null {
   const ext = path.extname(filename).toLowerCase();
   const map: Record<string, string> = {
-    ".ts": "typescript", ".tsx": "tsx", ".js": "javascript", ".jsx": "jsx",
-    ".py": "python", ".md": "markdown", ".json": "json", ".yaml": "yaml",
-    ".yml": "yaml", ".sh": "bash", ".css": "css", ".html": "html",
-    ".sql": "sql", ".toml": "toml", ".txt": "text", ".env": "dotenv",
+    ".ts": "typescript",
+    ".tsx": "tsx",
+    ".js": "javascript",
+    ".jsx": "jsx",
+    ".py": "python",
+    ".md": "markdown",
+    ".json": "json",
+    ".yaml": "yaml",
+    ".yml": "yaml",
+    ".sh": "bash",
+    ".css": "css",
+    ".html": "html",
+    ".sql": "sql",
+    ".toml": "toml",
+    ".txt": "text",
+    ".env": "dotenv",
   };
   return map[ext] ?? null;
 }
 
 // List all runs
 router.get("/runs", async (req, res) => {
-  const runs = await db
-    .select()
-    .from(runsTable)
-    .orderBy(desc(runsTable.createdAt))
-    .limit(100);
+  const runs = await db.select().from(runsTable).orderBy(desc(runsTable.createdAt)).limit(100);
 
   const runIds = runs.map((r) => r.id);
   const eventCounts = runIds.length
@@ -225,7 +258,7 @@ router.post("/runs", runCreateRateLimiter, async (req, res) => {
   if (repoUrl) agentArgs.push("--repo-url", repoUrl);
   if (requireApproval) agentArgs.push("--require-approval");
 
-  const agentEnv: Record<string, string> = { ...process.env as Record<string, string> };
+  const agentEnv: Record<string, string> = { ...(process.env as Record<string, string>) };
   // Disable interactive git credential prompts so the agent's local clone/commit
   // never blocks on a TTY. Pushing to the remote is handled in Node via the
   // GitHub REST API (see pushBranchViaApi) — no git credentials are needed here.
@@ -247,7 +280,9 @@ router.post("/runs", runCreateRateLimiter, async (req, res) => {
   });
   // After agent exits, attempt PR creation (fire-and-forget, non-fatal)
   const log = req.log;
-  child.on("exit", () => { void createPrAfterRun(runId, log); });
+  child.on("exit", () => {
+    void createPrAfterRun(runId, log);
+  });
   child.unref();
 
   const run = await db.select().from(runsTable).where(eq(runsTable.id, runId)).limit(1);
@@ -304,8 +339,14 @@ router.get("/runs/:runId", async (req, res) => {
     .where(eq(agentEventsTable.runId, runId))
     .orderBy(agentEventsTable.seq);
 
-  const objects = await db.select().from(graphObjectsTable).where(eq(graphObjectsTable.runId, runId));
-  const relations = await db.select().from(graphRelationsTable).where(eq(graphRelationsTable.runId, runId));
+  const objects = await db
+    .select()
+    .from(graphObjectsTable)
+    .where(eq(graphObjectsTable.runId, runId));
+  const relations = await db
+    .select()
+    .from(graphRelationsTable)
+    .where(eq(graphRelationsTable.runId, runId));
 
   return res.json({
     ...r,
@@ -375,8 +416,14 @@ router.get("/runs/:runId/events", async (req, res) => {
 // Get graph
 router.get("/runs/:runId/graph", async (req, res) => {
   const { runId } = req.params;
-  const objects = await db.select().from(graphObjectsTable).where(eq(graphObjectsTable.runId, runId));
-  const relations = await db.select().from(graphRelationsTable).where(eq(graphRelationsTable.runId, runId));
+  const objects = await db
+    .select()
+    .from(graphObjectsTable)
+    .where(eq(graphObjectsTable.runId, runId));
+  const relations = await db
+    .select()
+    .from(graphRelationsTable)
+    .where(eq(graphRelationsTable.runId, runId));
 
   return res.json({
     objects: objects.map((o) => ({
@@ -471,7 +518,13 @@ router.post("/runs/:runId/approvals/:approvalId", async (req, res) => {
       // Changes were committed during finalize; push + PR like a normal run.
       void createPrAfterRun(runId, req.log);
     }
-    return res.json({ runId, approvalId, decision, status: run[0]?.status ?? "unknown", detail: stdout.trim() });
+    return res.json({
+      runId,
+      approvalId,
+      decision,
+      status: run[0]?.status ?? "unknown",
+      detail: stdout.trim(),
+    });
   } catch (err) {
     return res.status(500).json({ error: "failed to finalize approval", detail: String(err) });
   }
@@ -480,7 +533,11 @@ router.post("/runs/:runId/approvals/:approvalId", async (req, res) => {
 // List files in a run's work directory
 router.get("/runs/:runId/files", async (req, res) => {
   const { runId } = req.params;
-  const runs = await db.select({ workDir: runsTable.workDir }).from(runsTable).where(eq(runsTable.id, runId)).limit(1);
+  const runs = await db
+    .select({ workDir: runsTable.workDir })
+    .from(runsTable)
+    .where(eq(runsTable.id, runId))
+    .limit(1);
   if (!runs.length) return res.status(404).json({ error: "Run not found" });
   const workDir = runs[0]!.workDir;
   if (!workDir || !existsSync(workDir)) return res.json([]);
@@ -496,7 +553,11 @@ router.get("/runs/:runId/files/content", async (req, res) => {
   const { runId } = req.params;
   const filePath = req.query.path as string;
   if (!filePath) return res.status(400).json({ error: "path query parameter required" });
-  const runs = await db.select({ workDir: runsTable.workDir }).from(runsTable).where(eq(runsTable.id, runId)).limit(1);
+  const runs = await db
+    .select({ workDir: runsTable.workDir })
+    .from(runsTable)
+    .where(eq(runsTable.id, runId))
+    .limit(1);
   if (!runs.length) return res.status(404).json({ error: "Run not found" });
   const workDir = runs[0]!.workDir;
   if (!workDir) return res.status(404).json({ error: "Run has no work directory" });
@@ -510,7 +571,12 @@ router.get("/runs/:runId/files/content", async (req, res) => {
   if (stat.isDirectory()) return res.status(400).json({ error: "Path is a directory" });
   if (stat.size > 500_000) return res.status(400).json({ error: "File too large (>500KB)" });
   const content = readFileSync(fullPath, "utf-8");
-  return res.json({ path: filePath, content, language: detectRunFileLanguage(filePath), size: stat.size });
+  return res.json({
+    path: filePath,
+    content,
+    language: detectRunFileLanguage(filePath),
+    size: stat.size,
+  });
 });
 
 // Get patch detail (includes unified diff)
@@ -546,19 +612,27 @@ async function detectTestFiles(workDir: string): Promise<{ pyTests: string[]; js
   let pyTests: string[] = [];
   let jsTests: string[] = [];
   try {
-    const out = (await execAsync(
-      "find . -maxdepth 4 \\( -name 'test_*.py' -o -name '*_test.py' \\) | head -10",
-      { cwd: workDir, timeout: 5000 }
-    )).stdout.trim();
+    const out = (
+      await execAsync(
+        "find . -maxdepth 4 \\( -name 'test_*.py' -o -name '*_test.py' \\) | head -10",
+        { cwd: workDir, timeout: 5000 },
+      )
+    ).stdout.trim();
     if (out) pyTests = out.split("\n").filter(Boolean);
-  } catch { /* ignore */ }
+  } catch {
+    /* ignore */
+  }
   try {
-    const out = (await execAsync(
-      "find . -maxdepth 4 \\( -name '*.test.ts' -o -name '*.spec.ts' -o -name '*.test.js' \\) | head -10",
-      { cwd: workDir, timeout: 5000 }
-    )).stdout.trim();
+    const out = (
+      await execAsync(
+        "find . -maxdepth 4 \\( -name '*.test.ts' -o -name '*.spec.ts' -o -name '*.test.js' \\) | head -10",
+        { cwd: workDir, timeout: 5000 },
+      )
+    ).stdout.trim();
     if (out) jsTests = out.split("\n").filter(Boolean);
-  } catch { /* ignore */ }
+  } catch {
+    /* ignore */
+  }
   return { pyTests, jsTests };
 }
 
@@ -591,14 +665,14 @@ router.post("/runs/:runId/test", async (req, res) => {
 
   const { pyTests, jsTests } = await detectTestFiles(run.workDir);
   if (pyTests.length === 0 && jsTests.length === 0) {
-    return res.status(400).json({ error: "No test files found in work directory", hasTests: false });
+    return res
+      .status(400)
+      .json({ error: "No test files found in work directory", hasTests: false });
   }
 
   const isPytest = pyTests.length > 0;
   // No pipe to head — must preserve real test-runner exit code
-  const testCommand = isPytest
-    ? "python3 -m pytest -x --tb=short"
-    : "npx jest --passWithNoTests";
+  const testCommand = isPytest ? "python3 -m pytest -x --tb=short" : "npx jest --passWithNoTests";
   const framework = isPytest ? "pytest" : "jest";
 
   let output = "";
@@ -615,7 +689,9 @@ router.post("/runs/:runId/test", async (req, res) => {
     output = (result.stdout + result.stderr).trim();
     commandOk = true;
   } catch (err: any) {
-    output = ((err.stdout ?? "") + (err.stderr ?? "") || String(err.message ?? "Test run failed")).trim();
+    output = (
+      (err.stdout ?? "") + (err.stderr ?? "") || String(err.message ?? "Test run failed")
+    ).trim();
     commandOk = false;
   }
 
@@ -635,7 +711,7 @@ router.post("/runs/:runId/test", async (req, res) => {
     .select({ maxSeq: sql<number>`MAX(seq)` })
     .from(agentEventsTable)
     .where(eq(agentEventsTable.runId, runId));
-  const nextSeq = (Number(seqRows[0]?.maxSeq ?? 0)) + 1;
+  const nextSeq = Number(seqRows[0]?.maxSeq ?? 0) + 1;
 
   const eventId = uuidv4();
   const now = new Date();
@@ -644,7 +720,15 @@ router.post("/runs/:runId/test", async (req, res) => {
     runId,
     type: "test.run.completed",
     seq: nextSeq,
-    payload: { status, passed, failed, total, output: output.slice(0, 5000), triggered_by: "user", framework },
+    payload: {
+      status,
+      passed,
+      failed,
+      total,
+      output: output.slice(0, 5000),
+      triggered_by: "user",
+      framework,
+    },
     createdAt: now,
   });
 
@@ -679,7 +763,9 @@ router.post("/runs/:runId/fork", runCreateRateLimiter, async (req, res) => {
   const newRunId = uuidv4();
   const newGoal = goal ?? parent[0]!.goal;
   const newModel = model ?? parent[0]!.model;
-  const effectiveGoal = instruction ? `${newGoal}\n\nAdditional instruction: ${instruction}` : newGoal;
+  const effectiveGoal = instruction
+    ? `${newGoal}\n\nAdditional instruction: ${instruction}`
+    : newGoal;
   // Fork inherits the parent's repoUrl unless the caller overrides it
   const effectiveRepoUrl = forkRepoUrl ?? parent[0]!.repoUrl ?? null;
 
@@ -703,14 +789,21 @@ router.post("/runs/:runId/fork", runCreateRateLimiter, async (req, res) => {
 
   // Spawn agent
   const agentScript = path.join(forkWorkspaceRoot, "scripts/agent/run_agent.py");
-  const forkAgentArgs = ["--run-id", newRunId, "--goal", effectiveGoal, "--work-dir", resolvedWorkDir];
+  const forkAgentArgs = [
+    "--run-id",
+    newRunId,
+    "--goal",
+    effectiveGoal,
+    "--work-dir",
+    resolvedWorkDir,
+  ];
   if (effectiveRepoUrl) forkAgentArgs.push("--repo-url", effectiveRepoUrl);
   // Real ActiveGraph fork: copy the parent's native event log up to the chosen
   // event into this run (shared lineage), then continue. The agent degrades to
   // a fresh continuation if the parent predates the native store.
   if (atEventId) forkAgentArgs.push("--fork-from", runId, "--at-event", atEventId);
 
-  const forkAgentEnv: Record<string, string> = { ...process.env as Record<string, string> };
+  const forkAgentEnv: Record<string, string> = { ...(process.env as Record<string, string>) };
   // Pushing is handled in Node via the GitHub REST API (pushBranchViaApi); the
   // subprocess only needs non-interactive git for its local clone/commit.
   delete forkAgentEnv["GIT_ASKPASS"];
@@ -729,7 +822,9 @@ router.post("/runs/:runId/fork", runCreateRateLimiter, async (req, res) => {
     stdio: ["ignore", "ignore", "ignore"],
   });
   const forkLog = req.log;
-  child.on("exit", () => { void createPrAfterRun(newRunId, forkLog); });
+  child.on("exit", () => {
+    void createPrAfterRun(newRunId, forkLog);
+  });
   child.unref();
 
   const run = await db.select().from(runsTable).where(eq(runsTable.id, newRunId)).limit(1);
@@ -747,8 +842,16 @@ router.get("/runs/:runId/diff/:otherId", async (req, res) => {
   const { runId, otherId } = req.params;
 
   const [eventsA, eventsB, objectsA, objectsB] = await Promise.all([
-    db.select().from(agentEventsTable).where(eq(agentEventsTable.runId, runId)).orderBy(agentEventsTable.seq),
-    db.select().from(agentEventsTable).where(eq(agentEventsTable.runId, otherId)).orderBy(agentEventsTable.seq),
+    db
+      .select()
+      .from(agentEventsTable)
+      .where(eq(agentEventsTable.runId, runId))
+      .orderBy(agentEventsTable.seq),
+    db
+      .select()
+      .from(agentEventsTable)
+      .where(eq(agentEventsTable.runId, otherId))
+      .orderBy(agentEventsTable.seq),
     db.select().from(graphObjectsTable).where(eq(graphObjectsTable.runId, runId)),
     db.select().from(graphObjectsTable).where(eq(graphObjectsTable.runId, otherId)),
   ]);
@@ -779,8 +882,20 @@ router.get("/runs/:runId/diff/:otherId", async (req, res) => {
       toolCallsB: countByType(eventsB, "tool"),
     },
     objectDiffs: [
-      ...added.map((o) => ({ type: o.objectType, objectId: o.id, changeType: "added" as const, before: null, after: o.data })),
-      ...removed.map((o) => ({ type: o.objectType, objectId: o.id, changeType: "removed" as const, before: o.data, after: null })),
+      ...added.map((o) => ({
+        type: o.objectType,
+        objectId: o.id,
+        changeType: "added" as const,
+        before: null,
+        after: o.data,
+      })),
+      ...removed.map((o) => ({
+        type: o.objectType,
+        objectId: o.id,
+        changeType: "removed" as const,
+        before: o.data,
+        after: null,
+      })),
     ],
   });
 });
@@ -798,7 +913,7 @@ router.post("/runs/:runId/permissions/:permId", async (req, res) => {
     .from(agentEventsTable)
     .where(eq(agentEventsTable.runId, runId));
 
-  const nextSeq = (Number(seq[0]?.maxSeq ?? 0)) + 1;
+  const nextSeq = Number(seq[0]?.maxSeq ?? 0) + 1;
 
   await db.insert(agentEventsTable).values({
     id: eventId,
@@ -834,7 +949,11 @@ router.get("/runs/:runId/stream", async (req, res) => {
 
   const poll = async () => {
     try {
-      const runs = await db.select({ status: runsTable.status }).from(runsTable).where(eq(runsTable.id, runId)).limit(1);
+      const runs = await db
+        .select({ status: runsTable.status })
+        .from(runsTable)
+        .where(eq(runsTable.id, runId))
+        .limit(1);
       if (!runs.length) {
         res.write("event: error\ndata: Run not found\n\n");
         res.end();
@@ -848,11 +967,13 @@ router.get("/runs/:runId/stream", async (req, res) => {
         .orderBy(agentEventsTable.seq);
 
       for (const event of newEvents) {
-        res.write(`event: agent_event\ndata: ${JSON.stringify({
-          ...event,
-          payload: event.payload ?? {},
-          createdAt: event.createdAt.toISOString(),
-        })}\n\n`);
+        res.write(
+          `event: agent_event\ndata: ${JSON.stringify({
+            ...event,
+            payload: event.payload ?? {},
+            createdAt: event.createdAt.toISOString(),
+          })}\n\n`,
+        );
         lastSeq = event.seq;
       }
 
@@ -871,7 +992,9 @@ router.get("/runs/:runId/stream", async (req, res) => {
   };
 
   poll();
-  req.on("close", () => { done = true; });
+  req.on("close", () => {
+    done = true;
+  });
 });
 
 export default router;

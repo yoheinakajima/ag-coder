@@ -26,7 +26,9 @@ export const runsTable = pgTable("runs", {
 // (approval.requested -> approval.granted/denied) surfaced for the UI.
 export const agentApprovalsTable = pgTable("agent_approvals", {
   id: text("id").primaryKey(),
-  runId: text("run_id").notNull().references(() => runsTable.id),
+  runId: text("run_id")
+    .notNull()
+    .references(() => runsTable.id),
   kind: text("kind").notNull(), // e.g. "patch_set"
   status: text("status").notNull().default("pending"), // pending | approved | rejected
   summary: text("summary"),
@@ -38,7 +40,9 @@ export const agentApprovalsTable = pgTable("agent_approvals", {
 
 export const agentEventsTable = pgTable("agent_events", {
   id: text("id").primaryKey(),
-  runId: text("run_id").notNull().references(() => runsTable.id),
+  runId: text("run_id")
+    .notNull()
+    .references(() => runsTable.id),
   type: text("type").notNull(),
   seq: integer("seq").notNull(),
   payload: jsonb("payload"),

@@ -16,7 +16,7 @@ event log — `PostgresEventStore` — and `Graph.emit` persists every event to 
 attached store automatically. Re-deriving the trace by hand meant:
 
 - reimplementing persistence the framework gives away for free,
-- making the UI tables a *parallel* artifact that has to be kept in sync, and
+- making the UI tables a _parallel_ artifact that has to be kept in sync, and
 - foreclosing the framework's flagship features (replay, fork) that are built on
   top of that log.
 
@@ -25,7 +25,7 @@ attached store automatically. Re-deriving the trace by hand meant:
 `scripts/agent/run_agent.py`:
 
 1. **Attach the native store as the authoritative log.** `_open_native_store()`
-   opens a `PostgresEventStore` and `graph.attach_store()` wires it in *before*
+   opens a `PostgresEventStore` and `graph.attach_store()` wires it in _before_
    any event is emitted. The runtime now persists its complete event stream —
    including the framework lifecycle events (`behavior.started/completed`,
    `relation.created`, framework `patch.applied`, …) that the UI projection
@@ -56,12 +56,12 @@ attached store automatically. Re-deriving the trace by hand meant:
 
 A demo run produces:
 
-| Surface | Result |
-|---|---|
-| App status | `completed` |
-| UI projection | 25 `agent_events`, 6 `graph_objects`, 5 `graph_relations` |
-| Native store (`activegraph.events`) | **38** events (full lifecycle trace) |
-| Native store (`activegraph.runs`) | run row with goal |
+| Surface                             | Result                                                    |
+| ----------------------------------- | --------------------------------------------------------- |
+| App status                          | `completed`                                               |
+| UI projection                       | 25 `agent_events`, 6 `graph_objects`, 5 `graph_relations` |
+| Native store (`activegraph.events`) | **38** events (full lifecycle trace)                      |
+| Native store (`activegraph.runs`)   | run row with goal                                         |
 
 Rebuilding the UI tables from the native store alone
 (`--rebuild-projection`) reproduces the live projection **byte-for-byte** —

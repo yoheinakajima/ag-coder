@@ -1,7 +1,7 @@
 # Tier 1 prototype — the runtime owns the LLM + tool loop
 
 > Status: prototype. The deepest of the Tier-1 changes: the agent's core
-> think→act→observe loop now runs *inside* ActiveGraph instead of in hand-rolled
+> think→act→observe loop now runs _inside_ ActiveGraph instead of in hand-rolled
 > provider SDK code. Demo mode (no key) is unchanged.
 
 ## The problem this addresses
@@ -28,7 +28,7 @@ cacheable, replayable, or budgeted by the runtime.
    `tools=[…]` and the runtime owns the entire turn loop: prompt assembly →
    `llm.requested` → provider call → `llm.responded` → `tool.requested` →
    tool dispatch → `tool.responded` → repeat, all as native events, with
-   `max_tool_turns` bounding it. The developer handler runs *once*, after the
+   `max_tool_turns` bounding it. The developer handler runs _once_, after the
    loop.
 
 3. **Graph objects from recorded events.** The handler
@@ -52,7 +52,7 @@ Deleted: `_run_llm_mode`, `_run_anthropic_loop`, `_run_openai_loop`,
 
 ## Verification (local Postgres + live provider)
 
-Goal: *"Create a file hello.py that prints 'Hello, ActiveGraph'."*
+Goal: _"Create a file hello.py that prints 'Hello, ActiveGraph'."_
 
 - The run **completed** and actually wrote `hello.py` with the right contents.
 - The trace shows the runtime owning the loop: native `llm.requested` /

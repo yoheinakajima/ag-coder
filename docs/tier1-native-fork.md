@@ -56,14 +56,14 @@ CLI: `run_agent.py --run-id <new> --goal <g> --fork-from <parent> --at-event <ev
 
 Forking a completed parent at its `task.ready` event (native `evt_008`):
 
-| Check | Result |
-|---|---|
-| Fork status | `completed` |
-| Native lineage (`activegraph.runs`) | `fork → parent`, `forked_at_event_id = evt_008` |
-| Inherited prefix | UI seq 1–6 = the parent's events up to the fork point |
-| Continuation | seq 7 = `run.forked`, then a fresh `goal.created` and new task/patch/test |
-| Native event count | parent 38 → fork 46 (8 copied + new) |
-| Rebuild from store | fork's UI projection rebuilds from its 46-event native log |
+| Check                               | Result                                                                    |
+| ----------------------------------- | ------------------------------------------------------------------------- |
+| Fork status                         | `completed`                                                               |
+| Native lineage (`activegraph.runs`) | `fork → parent`, `forked_at_event_id = evt_008`                           |
+| Inherited prefix                    | UI seq 1–6 = the parent's events up to the fork point                     |
+| Continuation                        | seq 7 = `run.forked`, then a fresh `goal.created` and new task/patch/test |
+| Native event count                  | parent 38 → fork 46 (8 copied + new)                                      |
+| Rebuild from store                  | fork's UI projection rebuilds from its 46-event native log                |
 
 Degraded case (parent has no native log): the run still **completes**, starting
 fresh with an `assistant.message.added` note explaining the lineage couldn't be
