@@ -19,6 +19,19 @@ found most interesting to build — what it's actually like to write an agent on
 of [ActiveGraph](https://activegraph.ai) (published on PyPI as
 [`activegraph`](https://pypi.org/project/activegraph/)).
 
+> **Note (architecture has since moved closer to the framework).** Parts of this
+> walkthrough below describe an earlier design that hand-rolled persistence and
+> the LLM/tool loop. The agent now leans on ActiveGraph's own primitives: the
+> native `PostgresEventStore` is the authoritative log (the `PostgresMirror` is a
+> *projection* of it), the LLM think→act→observe loop runs inside the runtime via
+> `@tool` + `@llm_behavior`, and fork is a real `PostgresEventStore.fork_run`
+> lineage copy + replay. The "sharp edges" and "lessons" sections below are kept
+> for history, but several of them were consequences of *not* using those
+> primitives. Current details:
+> [native event store](./tier1-native-event-store.md) ·
+> [tools + llm_behavior](./tier1-tools-and-llm-behavior.md) ·
+> [native fork](./tier1-native-fork.md).
+
 ---
 
 ## The idea: actions as a causal graph

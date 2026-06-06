@@ -182,10 +182,11 @@ PostgreSQL  ◀── API reads + streams via SSE ──▶  Browser
 
 - **Frontend** — React + Vite + Tailwind + shadcn/ui. The 4-panel run-detail view renders the graph, conversation, file patches, and event stream, streaming live updates over SSE (`GET /api/runs/:id/stream`).
 - **API** — Express 5 + TypeScript, contract-first via an OpenAPI spec with Orval generating typed React Query hooks and Zod schemas. It spawns the agent as a detached subprocess and exposes runs, events, graph objects, file trees, and diffs.
-- **Agent** — a Python process using ActiveGraph, event-driven end to end: creating an object wakes a behavior (goal → plan/task → execute → test → bounded fix loop), and a single listener mirrors the runtime's own event stream into Postgres, so the UI can render the graph as it forms.
-- **Database** — PostgreSQL via Drizzle ORM, with four tables: `runs`, `agent_events`, `graph_objects`, and `graph_relations`.
+- **Agent** — a Python process using ActiveGraph, event-driven end to end: creating an object wakes a behavior (goal → plan/task → execute → test → bounded fix loop). In LLM mode the runtime itself owns the think→act→observe loop via ActiveGraph `@tool`s and an `@llm_behavior` (no hand-rolled SDK loop).
+- **Authoritative log** — ActiveGraph's native `PostgresEventStore` is attached to the runtime, so every event is durably persisted to the framework's own schema-versioned, forkable, replayable tables (in a dedicated `activegraph` Postgres schema).
+- **UI projection** — a single listener (`PostgresMirror`) *projects* that same event stream into the denormalized tables the UI reads (`runs`, `agent_events`, `graph_objects`, `graph_relations`) — a derived view, not a parallel source of truth. It can be rebuilt from the authoritative log at any time.
 
-**The database is the source of truth for each run.** Stdout can still be useful during development, but the durable audit trail is the graph and event stream in Postgres — that keeps the live UI and the audit trail as the same thing.
+**The framework's event log is the source of truth for each run**, and the UI tables are a projection of it — which is what makes the live UI, the audit trail, and features like real fork + replay the same underlying thing. See the [deeper docs](#deeper-docs) for how each piece maps onto ActiveGraph.
 
 ---
 
@@ -248,6 +249,10 @@ This is not intended to be a full production coding environment, IDE replacement
 ## Deeper docs
 
 - [Building a coding agent you can actually audit — with ActiveGraph](./docs/building-with-activegraph.md) — the deeper technical walkthrough of how AG Coder is built on ActiveGraph.
+- How AG Coder leans on ActiveGraph's own primitives (recent architecture work):
+  - [Native event store as the authoritative log](./docs/tier1-native-event-store.md)
+  - [The runtime owns the LLM + tool loop (`@tool` / `@llm_behavior`)](./docs/tier1-tools-and-llm-behavior.md)
+  - [Real fork + replay built on `PostgresEventStore.fork_run`](./docs/tier1-native-fork.md)
 - [Contributing](./CONTRIBUTING.md) — setup, conventions, and the contract-first API workflow.
 - [ActiveGraph](https://activegraph.ai) · [`activegraph` on PyPI](https://pypi.org/project/activegraph/)
 
