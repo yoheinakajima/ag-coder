@@ -254,6 +254,8 @@ This is not intended to be a full production coding environment, IDE replacement
   - [The runtime owns the LLM + tool loop (`@tool` / `@llm_behavior`)](./docs/tier1-tools-and-llm-behavior.md)
   - [Real fork + replay built on `PostgresEventStore.fork_run`](./docs/tier1-native-fork.md)
   - [Auditability + safety: native `causal_chain`, `Policy` + approvals, `Frame` + cost budget](./docs/tier2-auditability-and-safety.md)
+  - [Operating AG Coder: RuntimeStatus, Prometheus, logging, and the `activegraph` CLI](./docs/operating-ag-coder.md)
+  - The coding domain is declared as a typed [`Pack`](./scripts/agent/coding_pack.py) (object/relation schemas + a pattern behavior).
 - [Contributing](./CONTRIBUTING.md) — setup, conventions, and the contract-first API workflow.
 - [ActiveGraph](https://activegraph.ai) · [`activegraph` on PyPI](https://pypi.org/project/activegraph/)
 
