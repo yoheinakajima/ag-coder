@@ -102,6 +102,13 @@ Requirements:
 - **PostgreSQL**
 - The Python agent's dependencies (`pip install -r scripts/agent/requirements.txt`)
 
+> **Behind a package firewall** (e.g. some sandboxes block packages below a
+> minimum age): if a single dev dependency is blocked, pnpm can abort the whole
+> install and leave filtered workspaces without their local `node_modules`. Once
+> the package is reachable, re-running `pnpm install` (or installing per-package
+> with `pnpm --filter <pkg> install`) links the rest. This doesn't happen on a
+> standard machine.
+
 ### 2. Set up environment variables
 
 Copy the example file and fill in your values:
@@ -113,12 +120,14 @@ cp .env.example .env
 | Variable             | Required        | Description                                                                                                   |
 | -------------------- | --------------- | ------------------------------------------------------------------------------------------------------------- |
 | `DATABASE_URL`       | ✅ **required** | Postgres connection string                                                                                    |
-| `ANTHROPIC_API_KEY`  | optional        | Enables the Anthropic-powered agent (takes priority if both are set)                                          |
-| `OPENAI_API_KEY`     | optional        | Enables the OpenAI-powered agent                                                                              |
+| `ANTHROPIC_API_KEY`  | optional        | Enables the Anthropic-powered agent (takes priority if both are set). **Required for live code-writing.**     |
+| `OPENAI_API_KEY`     | optional        | Recognized, but live code-writing needs Anthropic — the pinned runtime can't do tool use on OpenAI yet        |
 | `SESSION_SECRET`     | optional        | Express session secret (auto-generated if omitted)                                                            |
 | `AGENT_MAX_COST_USD` | optional        | Per-run LLM cost ceiling (default `1.00`); the runtime stops with `budget.cost_exhausted` before exceeding it |
 
 > If neither `ANTHROPIC_API_KEY` nor `OPENAI_API_KEY` is set, the agent runs in deterministic **demo mode**.
+>
+> For live runs that actually write code, use **Anthropic**. The agent is fully tool-driven, and the pinned `activegraph` runtime can't do tool use on OpenAI yet, so an OpenAI-only live run fails at its first tool call.
 
 ### 3. Push the database schema
 

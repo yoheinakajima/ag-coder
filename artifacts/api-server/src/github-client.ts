@@ -38,6 +38,11 @@ function isConnectorUnavailable(err: unknown): boolean {
   return /No connection found/i.test(String(err instanceof Error ? err.message : err));
 }
 
+/** True when GitHub rejected a write with HTTP 403 (insufficient token scope). */
+function isForbiddenError(err: unknown): boolean {
+  return /failed 403:/.test(String(err instanceof Error ? err.message : err));
+}
+
 /**
  * Make an authenticated GitHub REST API call.
  *
@@ -421,46 +426,63 @@ export async function pushBranchViaApi(params: {
   }
   const baseTreeSha = baseCommit.tree.sha;
 
-  // Build the new tree: create a blob for each added/modified file, mark
-  // deletions with a null sha.
-  const tree: Array<{ path: string; mode: string; type: "blob"; sha: string | null }> = [];
-  for (const c of changes) {
-    const mode = modeMap.get(c.path) ?? "100644";
-    if (c.deleted) {
-      tree.push({ path: c.path, mode, type: "blob", sha: null });
-    } else {
-      const content = readFileSync(path.join(wd, c.path));
-      const blob = await githubRequest<{ sha: string }>(
-        "POST",
-        `/repos/${owner}/${repo}/git/blobs`,
-        { content: content.toString("base64"), encoding: "base64" },
-      );
-      tree.push({ path: c.path, mode, type: "blob", sha: blob.sha });
-    }
-  }
-
-  const newTree = await githubRequest<{ sha: string }>(
-    "POST",
-    `/repos/${owner}/${repo}/git/trees`,
-    { base_tree: baseTreeSha, tree },
-  );
-  const newCommit = await githubRequest<{ sha: string }>(
-    "POST",
-    `/repos/${owner}/${repo}/git/commits`,
-    { message: `[AG Coder] ${params.goal}`, tree: newTree.sha, parents: [baseCommitSha] },
-  );
-
-  // Create the branch ref, or fast-forward/replace it if it already exists.
+  // All remaining calls write to the repo. If the credential can read but not
+  // write, GitHub returns 403 here — translate that into an actionable reason
+  // rather than leaking the raw API error, since the fix is the user's to make.
   try {
-    await githubRequest("POST", `/repos/${owner}/${repo}/git/refs`, {
-      ref: `refs/heads/${params.branch}`,
-      sha: newCommit.sha,
-    });
-  } catch {
-    await githubRequest("PATCH", `/repos/${owner}/${repo}/git/refs/heads/${params.branch}`, {
-      sha: newCommit.sha,
-      force: true,
-    });
+    // Build the new tree: create a blob for each added/modified file, mark
+    // deletions with a null sha.
+    const tree: Array<{ path: string; mode: string; type: "blob"; sha: string | null }> = [];
+    for (const c of changes) {
+      const mode = modeMap.get(c.path) ?? "100644";
+      if (c.deleted) {
+        tree.push({ path: c.path, mode, type: "blob", sha: null });
+      } else {
+        const content = readFileSync(path.join(wd, c.path));
+        const blob = await githubRequest<{ sha: string }>(
+          "POST",
+          `/repos/${owner}/${repo}/git/blobs`,
+          { content: content.toString("base64"), encoding: "base64" },
+        );
+        tree.push({ path: c.path, mode, type: "blob", sha: blob.sha });
+      }
+    }
+
+    const newTree = await githubRequest<{ sha: string }>(
+      "POST",
+      `/repos/${owner}/${repo}/git/trees`,
+      { base_tree: baseTreeSha, tree },
+    );
+    const newCommit = await githubRequest<{ sha: string }>(
+      "POST",
+      `/repos/${owner}/${repo}/git/commits`,
+      { message: `[AG Coder] ${params.goal}`, tree: newTree.sha, parents: [baseCommitSha] },
+    );
+
+    // Create the branch ref, or fast-forward/replace it if it already exists.
+    try {
+      await githubRequest("POST", `/repos/${owner}/${repo}/git/refs`, {
+        ref: `refs/heads/${params.branch}`,
+        sha: newCommit.sha,
+      });
+    } catch {
+      await githubRequest("PATCH", `/repos/${owner}/${repo}/git/refs/heads/${params.branch}`, {
+        sha: newCommit.sha,
+        force: true,
+      });
+    }
+  } catch (err) {
+    if (isForbiddenError(err)) {
+      return {
+        ok: false,
+        reason:
+          `GitHub denied the write (403). The credential can read ${owner}/${repo} ` +
+          `but not write to it — grant it "Contents: write" (and "Pull requests: write" ` +
+          `to open the PR). Fine-grained tokens must also list this repository in their ` +
+          `selected repos.`,
+      };
+    }
+    throw err;
   }
 
   return { ok: true };
