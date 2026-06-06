@@ -83,7 +83,7 @@ def _insert_event(conn, run_id: str, event_type: str, seq: int, payload: dict) -
 
 def update_run_status(conn, run_id: str, status: str):
     with conn.cursor() as cur:
-        if status in ("completed", "failed", "cancelled"):
+        if status in ("completed", "failed", "cancelled", "rejected"):
             cur.execute(
                 "UPDATE runs SET status = %s, completed_at = NOW() WHERE id = %s",
                 (status, run_id),
@@ -274,6 +274,67 @@ def _causal_chain_json(run_id: str, object_id: str) -> dict:
             pass
 
 
+def _insert_approval(conn, approval_id: str, run_id: str, kind: str, summary: str, data: dict) -> None:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO agent_approvals (id, run_id, kind, status, summary, data, created_at)
+            VALUES (%s, %s, %s, 'pending', %s, %s, NOW())
+            ON CONFLICT (id) DO NOTHING
+            """,
+            (approval_id, run_id, kind, summary, json.dumps(data, default=str)),
+        )
+    conn.commit()
+
+
+def _pending_approvals(conn, run_id: str) -> list[dict]:
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT id, kind, summary FROM agent_approvals WHERE run_id = %s AND status = 'pending' ORDER BY created_at",
+            (run_id,),
+        )
+        rows = cur.fetchall()
+    return [{"id": r[0], "kind": r[1], "summary": r[2]} for r in rows]
+
+
+def _resolve_approval(conn, approval_id: str, status: str, resolved_by: str) -> None:
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE agent_approvals SET status = %s, resolved_at = NOW(), resolved_by = %s WHERE id = %s",
+            (status, resolved_by, approval_id),
+        )
+    conn.commit()
+
+
+def _attach_for_continuation(run_id: str, conn):
+    """Open a run's native store, replay its log into a graph, project the existing
+    prefix into the UI tables through one mirror, and return everything wired so
+    NEW events append to both the native log and the UI projection.
+
+    Returns ``(graph, native_store_conn)``. Raises if the native store is missing.
+    """
+    from activegraph import Graph
+    from activegraph.core.ids import IDGen
+    from activegraph.store.postgres import PostgresEventStore
+
+    sconn = _open_native_store_conn()
+    if sconn is None:
+        raise RuntimeError("native event store unavailable — cannot continue run")
+    store = PostgresEventStore(sconn, run_id)
+    events = list(store.iter_events())
+    graph = Graph(ids=IDGen(), run_id=run_id)
+    for ev in events:
+        graph._replay_event(ev)  # noqa: SLF001 — framework replay seam
+    graph.ids.reseed_from_events(events)
+    graph.attach_store(store)
+    mirror = PostgresMirror(conn, run_id, graph)
+    _clear_ui_rows(conn, run_id)
+    for ev in events:
+        mirror.project(ev)
+    graph.add_listener(mirror)
+    return graph, sconn
+
+
 def _clear_ui_rows(app_conn, run_id: str) -> None:
     with app_conn.cursor() as cur:
         cur.execute("DELETE FROM agent_events WHERE run_id = %s", (run_id,))
@@ -334,7 +395,8 @@ class PostgresMirror:
             "relation.removed",
         }
     )
-    _SUPPRESSED_PREFIXES = ("pattern.", "runtime.", "approval.")
+    # approval.* are surfaced (the human-in-the-loop flow needs them in the UI).
+    _SUPPRESSED_PREFIXES = ("pattern.", "runtime.")
 
     def __init__(self, conn, run_id: str, graph) -> None:
         self._conn = conn
@@ -866,6 +928,31 @@ def _diff_stats(before: str, after: str, path: str) -> tuple[str, int, int]:
     return text, added, removed
 
 
+def _anthropic_provider():
+    """ActiveGraph's AnthropicProvider with a corrected ``count_tokens``.
+
+    The shipped ``count_tokens`` serializes messages with ``m.to_dict()``, which
+    leaves tool-result messages as ``role="tool"`` — a role the Anthropic API
+    rejects (``complete()`` correctly maps them via ``_message_to_anthropic``).
+    That path only fires when a cost budget (``max_cost_usd``) is set, so without
+    this fix enabling cost gating breaks every multi-turn tool run. We override
+    ``count_tokens`` to use the same message conversion ``complete()`` does.
+    """
+    from activegraph.llm import AnthropicProvider
+    from activegraph.llm.anthropic import _message_to_anthropic
+
+    class _CostAwareAnthropicProvider(AnthropicProvider):
+        def count_tokens(self, *, system, messages, model):  # type: ignore[override]
+            client = self._client()
+            kwargs = {"model": model, "messages": [_message_to_anthropic(m) for m in messages]}
+            if system:
+                kwargs["system"] = system
+            result = client.messages.count_tokens(**kwargs)
+            return int(getattr(result, "input_tokens", 0) or 0)
+
+    return _CostAwareAnthropicProvider()
+
+
 def _build_tools(work_dir: str) -> list:
     """Build the ActiveGraph Tool objects bound to this run's work dir.
 
@@ -944,6 +1031,17 @@ def _materialize_tool_objects(graph, bgraph, task_id) -> None:
         out = (resp.payload.get("output") if resp else None) or {}
         ok = bool(out.get("ok", True))
 
+        # Surface policy enforcement: a blocked write/command is a policy denial,
+        # not an ordinary tool error. Record it explicitly for the audit trail.
+        err = out.get("error") or ""
+        if not ok and ("Protected path" in err or "Blocked dangerous" in err):
+            bgraph.emit("policy.denied", {
+                "tool": tool_name,
+                "reason": err,
+                "target": args.get("path") or args.get("command"),
+                "task_id": task_id,
+            })
+
         if tool_name in ("write_file", "edit_file") and ok:
             patch = bgraph.add_object("patch", {
                 "path": out.get("path") or args.get("path"),
@@ -1002,8 +1100,14 @@ MAX_FIX_ATTEMPTS = 1
 
 def run_with_activegraph(run_id: str, goal: str, work_dir: str, conn,
                          repo_url: str | None = None,
-                         fork_from: tuple[str, str] | None = None):
+                         fork_from: tuple[str, str] | None = None,
+                         require_approval: bool = False) -> str:
     """Run the coding agent using the ActiveGraph runtime, event-driven end to end.
+
+    Returns the run's terminal status: ``"completed"`` or, when
+    ``require_approval`` is set and the run produced changes, ``"awaiting_approval"``
+    (the run pauses for a human to approve/reject before changes are committed; see
+    ``finalize_run``).
 
     When ``fork_from=(parent_run_id, ui_event_id)`` is given, the run is a real
     ActiveGraph fork: the parent's native event log up to that event is copied
@@ -1106,8 +1210,7 @@ def run_with_activegraph(run_id: str, goal: str, work_dir: str, conn,
     llm_provider = None
     if has_anthropic:
         try:
-            from activegraph.llm import AnthropicProvider
-            llm_provider = AnthropicProvider()
+            llm_provider = _anthropic_provider()
         except Exception:
             pass
     elif has_openai:
@@ -1338,8 +1441,22 @@ def run_with_activegraph(run_id: str, goal: str, work_dir: str, conn,
     except (TypeError, ValueError):
         pass
 
-    runtime = Runtime(graph, budget=budget, frame=frame, llm_provider=llm_provider,
-                      tools=runtime_tools, **replay_caches)
+    # ── Policy: the agent's declared capabilities, framework-native. This is the
+    # ActiveGraph primitive for "what may this agent do" — replacing the ad-hoc
+    # PROTECTED_PATHS/DANGEROUS_COMMANDS constants as the source of truth for the
+    # agent's permissions. The protected-path / dangerous-command checks in the
+    # tools enforce it; the executor surfaces blocked attempts as policy.denied.
+    # Patches require approval when the run was created with require_approval.
+    from activegraph import Policy
+    policy = Policy(
+        behavior="task_executor",
+        can_call_tool=["read_file", "write_file", "edit_file", "bash"],
+        can_create=["plan", "task", "patch", "file_snapshot", "command_result", "model_call", "test_run"],
+        requires_approval=["patch"] if require_approval else [],
+    )
+
+    runtime = Runtime(graph, budget=budget, frame=frame, policy=policy,
+                      llm_provider=llm_provider, tools=runtime_tools, **replay_caches)
 
     try:
         # ── Git: clone + branch before the task loop ──────────────────────────
@@ -1373,6 +1490,30 @@ def run_with_activegraph(run_id: str, goal: str, work_dir: str, conn,
             except Exception:
                 pass
 
+        # ── Human-in-the-loop gate ────────────────────────────────────────────
+        # If approval is required and the run produced applied patches, PAUSE here:
+        # record a pending approval, emit approval.requested, and leave changes
+        # uncommitted. A human resolves it (see finalize_run) before anything is
+        # committed/pushed. This is the ActiveGraph approval flow surfaced at the
+        # natural boundary for an LLM-driven loop (the completed patch-set).
+        applied_patches = [
+            o for o in graph.objects(type="patch")
+            if (o.data or {}).get("status") == "applied"
+        ]
+        if require_approval and applied_patches:
+            paths = [(o.data or {}).get("path") for o in applied_patches if (o.data or {}).get("path")]
+            summary = f"{len(applied_patches)} file change(s)" + (": " + ", ".join(paths[:6]) if paths else "")
+            approval_id = str(uuid.uuid4())
+            _insert_approval(conn, approval_id, run_id, "patch_set", summary,
+                             {"paths": paths, "patch_count": len(applied_patches)})
+            _emit_event(graph, "approval.requested", {
+                "approval_id": approval_id,
+                "kind": "patch_set",
+                "summary": summary,
+                "paths": paths,
+            })
+            return "awaiting_approval"
+
         # ── Git: commit changes locally after the task loop ───────────────────
         # The commit is pushed to the remote by the API server via the GitHub
         # REST API. A commit failure is logged via tool.error but does NOT fail
@@ -1381,6 +1522,7 @@ def run_with_activegraph(run_id: str, goal: str, work_dir: str, conn,
             _git_commit(run_id, goal, branch_name, work_dir, conn, graph)
 
         _emit_event(graph, "run.completed", {"run_id": run_id})
+        return "completed"
     finally:
         # The native store owns its own connection; close it once the run ends.
         if native_store_conn is not None:
@@ -1388,6 +1530,59 @@ def run_with_activegraph(run_id: str, goal: str, work_dir: str, conn,
                 native_store_conn.close()
             except Exception:
                 pass
+
+
+def finalize_run(run_id: str, decision: str, conn) -> str:
+    """Resolve a paused (awaiting_approval) run after a human decision.
+
+    ``decision`` is ``"approve"`` or ``"reject"``. Resumes the run on its native
+    log, emits the framework approval events (``approval.granted`` /
+    ``approval.denied``), and on approval commits the changes (for repo runs) and
+    completes the run; on rejection discards the working-tree changes and marks
+    the run ``rejected``. Returns the terminal status.
+    """
+    # Run metadata (repo/branch/goal/work dir) lives in the runs table.
+    with conn.cursor() as cur:
+        cur.execute("SELECT goal, work_dir, repo_url, repo_branch FROM runs WHERE id = %s", (run_id,))
+        row = cur.fetchone()
+    goal, work_dir, repo_url, branch_name = (row or (None, None, None, None))
+
+    approvals = _pending_approvals(conn, run_id)
+    if not approvals:
+        # Nothing to resolve (already finalized, or never paused). Leave as-is.
+        with conn.cursor() as cur:
+            cur.execute("SELECT status FROM runs WHERE id = %s", (run_id,))
+            r = cur.fetchone()
+        return (r[0] if r else "completed") or "completed"
+
+    graph, sconn = _attach_for_continuation(run_id, conn)
+    try:
+        approved = decision == "approve"
+        for a in approvals:
+            _resolve_approval(conn, a["id"], "approved" if approved else "rejected", "user")
+            _emit_event(graph, "approval.granted" if approved else "approval.denied", {
+                "approval_id": a["id"],
+                "kind": a["kind"],
+                "approved_by": "user",
+            })
+
+        if approved:
+            if repo_url and branch_name and work_dir:
+                _git_commit(run_id, goal or "", branch_name, work_dir, conn, graph)
+            _emit_event(graph, "run.completed", {"run_id": run_id, "approved": True})
+            return "completed"
+        else:
+            # Discard the agent's working-tree changes for repo runs.
+            if repo_url and work_dir and os.path.isdir(os.path.join(work_dir, ".git")):
+                _run_git_cmd(["checkout", "--", "."], cwd=work_dir)
+                _run_git_cmd(["clean", "-fd"], cwd=work_dir)
+            _emit_event(graph, "run.rejected", {"run_id": run_id})
+            return "rejected"
+    finally:
+        try:
+            sconn.close()
+        except Exception:
+            pass
 
 
 def _run_demo_mode(bgraph, task_id, task_description, work_dir):
@@ -1517,7 +1712,36 @@ def main():
             "tool/LLM calls to the goal. Accepts a scoped or local object id."
         ),
     )
+    parser.add_argument(
+        "--require-approval",
+        action="store_true",
+        help="Pause at awaiting_approval after producing changes; a human must approve before commit.",
+    )
+    parser.add_argument(
+        "--finalize",
+        action="store_true",
+        help="Don't run the agent: resolve a paused run for --run-id using --decision.",
+    )
+    parser.add_argument(
+        "--decision",
+        choices=["approve", "reject"],
+        default=None,
+        help="Decision for --finalize.",
+    )
     args = parser.parse_args()
+
+    # ── Finalize mode: resolve a paused (awaiting_approval) run ────────────────
+    if args.finalize:
+        if not args.decision:
+            parser.error("--finalize requires --decision approve|reject")
+        conn = get_conn()
+        try:
+            status = finalize_run(args.run_id, args.decision, conn)
+            update_run_status(conn, args.run_id, status)
+            print(f"Run {args.run_id} finalized: {status}")
+        finally:
+            conn.close()
+        return
 
     # ── Causal-chain mode: framework-native provenance walk for one object ─────
     if args.causal_chain:
@@ -1566,9 +1790,10 @@ def main():
         conn = get_conn()
         update_run_status(conn, args.run_id, "running")
 
-        run_with_activegraph(args.run_id, args.goal, args.work_dir, conn,
-                             repo_url=args.repo_url, fork_from=fork_from)
-        update_run_status(conn, args.run_id, "completed")
+        status = run_with_activegraph(args.run_id, args.goal, args.work_dir, conn,
+                                      repo_url=args.repo_url, fork_from=fork_from,
+                                      require_approval=args.require_approval)
+        update_run_status(conn, args.run_id, status or "completed")
 
     except KeyboardInterrupt:
         if conn:
