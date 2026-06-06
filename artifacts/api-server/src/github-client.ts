@@ -4,10 +4,11 @@
  *   1. Replit connector proxy  (works when the GitHub integration is connected)
  *   2. GITHUB_TOKEN env var    (for self-hosted / local / CI deployments)
  *
- * `githubRequest` tries the connector first. If the connector is unavailable
- * (SDK throws before making a request — not a real HTTP 4xx/5xx from GitHub),
- * it falls through to a direct `fetch` using `process.env.GITHUB_TOKEN`.
- * Real GitHub API errors (404, 422, etc.) are always re-thrown immediately.
+ * `githubRequest` tries the connector first. If the connector is unavailable —
+ * either the SDK throws before making a request, or the proxy returns its
+ * "No connection found" 401 because no integration is connected — it falls
+ * through to a direct `fetch` using `process.env.GITHUB_TOKEN`. Real GitHub API
+ * errors (404, 422, etc.) are always re-thrown immediately.
  *
  * IMPORTANT: Never cache the connectors instance. Create fresh on each call.
  */
@@ -20,6 +21,21 @@ import { logger } from "./lib/logger.js";
 /** True when the error originates from a real GitHub HTTP response (4xx/5xx). */
 function isHttpApiError(err: unknown): boolean {
   return /failed \d{3}:/.test(String(err instanceof Error ? err.message : err));
+}
+
+/**
+ * True when the error means the Replit connector isn't configured, rather than a
+ * genuine GitHub API error.
+ *
+ * When no GitHub integration is connected, the connector proxy responds 401 with
+ * a body like `No connection found for replid…`. That surfaces here as a
+ * `…failed 401: No connection found…` message, which `isHttpApiError` would
+ * otherwise classify as a real GitHub error and re-throw — skipping the
+ * `GITHUB_TOKEN` fallback entirely. Treat it as connector-unavailable so the
+ * token path runs.
+ */
+function isConnectorUnavailable(err: unknown): boolean {
+  return /No connection found/i.test(String(err instanceof Error ? err.message : err));
 }
 
 /**
@@ -56,8 +72,10 @@ export async function githubRequest<T = unknown>(
     return response.json() as Promise<T>;
   } catch (err) {
     // Re-throw real GitHub API errors (4xx/5xx) immediately — they won't be
-    // resolved by retrying with a different token.
-    if (isHttpApiError(err)) throw err;
+    // resolved by retrying with a different token. The "no connection" 401 the
+    // proxy returns when the integration isn't connected is NOT such an error:
+    // it means the connector is unavailable, so fall through to GITHUB_TOKEN.
+    if (isHttpApiError(err) && !isConnectorUnavailable(err)) throw err;
     connectorError = err;
   }
 
