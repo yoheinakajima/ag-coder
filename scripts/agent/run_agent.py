@@ -1458,6 +1458,17 @@ def run_with_activegraph(run_id: str, goal: str, work_dir: str, conn,
     runtime = Runtime(graph, budget=budget, frame=frame, policy=policy,
                       llm_provider=llm_provider, tools=runtime_tools, **replay_caches)
 
+    # ── Pack: declare the coding-agent domain as a typed ActiveGraph Pack. ──
+    # Loading it validates every object/relation against the declared schemas
+    # (plan/task/patch/test_run/…) and contributes a pattern-triggered behavior.
+    # Best-effort: a schema mismatch must not take down a run, so we fall back to
+    # an untyped graph if loading fails.
+    try:
+        from coding_pack import coding_pack
+        runtime.load_pack(coding_pack)
+    except Exception as exc:
+        _emit_event(graph, "pack.load_failed", {"error": str(exc)})
+
     try:
         # ── Git: clone + branch before the task loop ──────────────────────────
         branch_name: str | None = None
