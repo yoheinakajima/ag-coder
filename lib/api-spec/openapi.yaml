@@ -168,6 +168,61 @@ paths:
         "404":
           description: Object or run not found
 
+  /runs/{runId}/approvals:
+    get:
+      operationId: listRunApprovals
+      tags: [runs]
+      summary: List a run's human-in-the-loop approvals
+      parameters:
+        - name: runId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Approvals
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Approval"
+
+  /runs/{runId}/approvals/{approvalId}:
+    post:
+      operationId: resolveRunApproval
+      tags: [runs]
+      summary: Approve or reject a pending approval, finalizing the paused run
+      parameters:
+        - name: runId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: approvalId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ApprovalDecision"
+      responses:
+        "200":
+          description: Resolved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApprovalResult"
+        "404":
+          description: Approval not found
+        "409":
+          description: Approval already resolved
+
   /runs/{runId}/files:
     get:
       operationId: listRunFiles
@@ -461,7 +516,7 @@ components:
           type: string
         status:
           type: string
-          enum: [pending, running, completed, failed, cancelled]
+          enum: [pending, running, awaiting_approval, completed, failed, cancelled, rejected]
         parentRunId:
           type: ["string", "null"]
         forkEventId:
@@ -479,6 +534,8 @@ components:
         prStatus:
           type: ["string", "null"]
           enum: ["open", "merged", "closed", null]
+        requireApproval:
+          type: boolean
         eventCount:
           type: integer
         createdAt:
@@ -542,6 +599,50 @@ components:
           type: ["string", "null"]
         prUrl:
           type: ["string", "null"]
+        requireApproval:
+          type: boolean
+          description: Pause at awaiting_approval; a human must approve before changes are committed.
+
+    Approval:
+      type: object
+      required: [id, runId, kind, status, createdAt]
+      properties:
+        id:
+          type: string
+        runId:
+          type: string
+        kind:
+          type: string
+        status:
+          type: string
+          enum: [pending, approved, rejected]
+        summary:
+          type: ["string", "null"]
+        createdAt:
+          type: string
+        resolvedAt:
+          type: ["string", "null"]
+
+    ApprovalDecision:
+      type: object
+      required: [decision]
+      properties:
+        decision:
+          type: string
+          enum: [approve, reject]
+
+    ApprovalResult:
+      type: object
+      required: [runId, approvalId, decision, status]
+      properties:
+        runId:
+          type: string
+        approvalId:
+          type: string
+        decision:
+          type: string
+        status:
+          type: string
 
     ForkInput:
       type: object

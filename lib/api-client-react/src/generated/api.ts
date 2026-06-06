@@ -21,6 +21,9 @@ import type {
 
 import type {
   AgentEvent,
+  Approval,
+  ApprovalDecision,
+  ApprovalResult,
   CausalChain,
   FileContent,
   FileEntry,
@@ -671,6 +674,157 @@ export function useGetRunCausalChain<TData = Awaited<ReturnType<typeof getRunCau
 
 
 
+
+export const getListRunApprovalsUrl = (runId: string,) => {
+
+
+
+
+  return `/api/runs/${runId}/approvals`
+}
+
+/**
+ * @summary List a run's human-in-the-loop approvals
+ */
+export const listRunApprovals = async (runId: string, options?: RequestInit): Promise<Approval[]> => {
+
+  return customFetch<Approval[]>(getListRunApprovalsUrl(runId),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getListRunApprovalsQueryKey = (runId: string,) => {
+    return [
+    `/api/runs/${runId}/approvals`
+    ] as const;
+    }
+
+
+export const getListRunApprovalsQueryOptions = <TData = Awaited<ReturnType<typeof listRunApprovals>>, TError = ErrorType<unknown>>(runId: string, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listRunApprovals>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getListRunApprovalsQueryKey(runId);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof listRunApprovals>>> = ({ signal }) => listRunApprovals(runId, { signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, enabled: !!(runId), ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof listRunApprovals>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type ListRunApprovalsQueryResult = NonNullable<Awaited<ReturnType<typeof listRunApprovals>>>
+export type ListRunApprovalsQueryError = ErrorType<unknown>
+
+
+/**
+ * @summary List a run's human-in-the-loop approvals
+ */
+
+export function useListRunApprovals<TData = Awaited<ReturnType<typeof listRunApprovals>>, TError = ErrorType<unknown>>(
+ runId: string, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listRunApprovals>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getListRunApprovalsQueryOptions(runId,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+
+
+
+export const getResolveRunApprovalUrl = (runId: string,
+    approvalId: string,) => {
+
+
+
+
+  return `/api/runs/${runId}/approvals/${approvalId}`
+}
+
+/**
+ * @summary Approve or reject a pending approval, finalizing the paused run
+ */
+export const resolveRunApproval = async (runId: string,
+    approvalId: string,
+    approvalDecision: ApprovalDecision, options?: RequestInit): Promise<ApprovalResult> => {
+
+  return customFetch<ApprovalResult>(getResolveRunApprovalUrl(runId,approvalId),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(
+      approvalDecision,)
+  }
+);}
+
+
+
+
+export const getResolveRunApprovalMutationOptions = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof resolveRunApproval>>, TError,{runId: string;approvalId: string;data: BodyType<ApprovalDecision>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof resolveRunApproval>>, TError,{runId: string;approvalId: string;data: BodyType<ApprovalDecision>}, TContext> => {
+
+const mutationKey = ['resolveRunApproval'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof resolveRunApproval>>, {runId: string;approvalId: string;data: BodyType<ApprovalDecision>}> = (props) => {
+          const {runId,approvalId,data} = props ?? {};
+
+          return  resolveRunApproval(runId,approvalId,data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type ResolveRunApprovalMutationResult = NonNullable<Awaited<ReturnType<typeof resolveRunApproval>>>
+    export type ResolveRunApprovalMutationBody = BodyType<ApprovalDecision>
+    export type ResolveRunApprovalMutationError = ErrorType<void>
+
+    /**
+ * @summary Approve or reject a pending approval, finalizing the paused run
+ */
+export const useResolveRunApproval = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof resolveRunApproval>>, TError,{runId: string;approvalId: string;data: BodyType<ApprovalDecision>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof resolveRunApproval>>,
+        TError,
+        {runId: string;approvalId: string;data: BodyType<ApprovalDecision>},
+        TContext
+      > => {
+      return useMutation(getResolveRunApprovalMutationOptions(options));
+    }
 
 export const getListRunFilesUrl = (runId: string,) => {
 

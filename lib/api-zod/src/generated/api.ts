@@ -23,7 +23,7 @@ export const HealthCheckResponse = zod.object({
 export const ListRunsResponseItem = zod.object({
   "id": zod.string(),
   "goal": zod.string(),
-  "status": zod.enum(['pending', 'running', 'completed', 'failed', 'cancelled']),
+  "status": zod.enum(['pending', 'running', 'awaiting_approval', 'completed', 'failed', 'cancelled', 'rejected']),
   "parentRunId": zod.string().nullish(),
   "forkEventId": zod.string().nullish(),
   "model": zod.string().nullish(),
@@ -32,6 +32,7 @@ export const ListRunsResponseItem = zod.object({
   "repoBranch": zod.string().nullish(),
   "prUrl": zod.string().nullish(),
   "prStatus": zod.union([zod.literal('open'),zod.literal('merged'),zod.literal('closed'),zod.literal(null)]).nullish(),
+  "requireApproval": zod.boolean().optional(),
   "eventCount": zod.number().optional(),
   "createdAt": zod.string(),
   "completedAt": zod.string().nullish()
@@ -50,7 +51,8 @@ export const CreateRunBody = zod.object({
   "model": zod.string().nullish(),
   "repoUrl": zod.string().nullish(),
   "repoBranch": zod.string().nullish(),
-  "prUrl": zod.string().nullish()
+  "prUrl": zod.string().nullish(),
+  "requireApproval": zod.boolean().optional().describe('Pause at awaiting_approval; a human must approve before changes are committed.')
 })
 
 
@@ -110,7 +112,7 @@ export const CancelRunParams = zod.object({
 export const CancelRunResponse = zod.object({
   "id": zod.string(),
   "goal": zod.string(),
-  "status": zod.enum(['pending', 'running', 'completed', 'failed', 'cancelled']),
+  "status": zod.enum(['pending', 'running', 'awaiting_approval', 'completed', 'failed', 'cancelled', 'rejected']),
   "parentRunId": zod.string().nullish(),
   "forkEventId": zod.string().nullish(),
   "model": zod.string().nullish(),
@@ -119,6 +121,7 @@ export const CancelRunResponse = zod.object({
   "repoBranch": zod.string().nullish(),
   "prUrl": zod.string().nullish(),
   "prStatus": zod.union([zod.literal('open'),zod.literal('merged'),zod.literal('closed'),zod.literal(null)]).nullish(),
+  "requireApproval": zod.boolean().optional(),
   "eventCount": zod.number().optional(),
   "createdAt": zod.string(),
   "completedAt": zod.string().nullish()
@@ -180,6 +183,45 @@ export const GetRunCausalChainResponse = zod.object({
   "runId": zod.string(),
   "objectId": zod.string().describe('Local graph object id the chain was computed for'),
   "chain": zod.string().describe('ActiveGraph\'s causal_chain rendering — the object walked back through its LLM\/tool calls and triggering events up to goal.created.')
+})
+
+
+/**
+ * @summary List a run's human-in-the-loop approvals
+ */
+export const ListRunApprovalsParams = zod.object({
+  "runId": zod.coerce.string()
+})
+
+export const ListRunApprovalsResponseItem = zod.object({
+  "id": zod.string(),
+  "runId": zod.string(),
+  "kind": zod.string(),
+  "status": zod.enum(['pending', 'approved', 'rejected']),
+  "summary": zod.string().nullish(),
+  "createdAt": zod.string(),
+  "resolvedAt": zod.string().nullish()
+})
+export const ListRunApprovalsResponse = zod.array(ListRunApprovalsResponseItem)
+
+
+/**
+ * @summary Approve or reject a pending approval, finalizing the paused run
+ */
+export const ResolveRunApprovalParams = zod.object({
+  "runId": zod.coerce.string(),
+  "approvalId": zod.coerce.string()
+})
+
+export const ResolveRunApprovalBody = zod.object({
+  "decision": zod.enum(['approve', 'reject'])
+})
+
+export const ResolveRunApprovalResponse = zod.object({
+  "runId": zod.string(),
+  "approvalId": zod.string(),
+  "decision": zod.string(),
+  "status": zod.string()
 })
 
 

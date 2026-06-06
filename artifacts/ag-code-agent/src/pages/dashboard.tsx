@@ -139,6 +139,7 @@ export default function Dashboard() {
   const [goal, setGoal] = useState("");
   const [repoUrl, setRepoUrl] = useState("");
   const [showRepoField, setShowRepoField] = useState(false);
+  const [requireApproval, setRequireApproval] = useState(false);
   const [selectedModel, setSelectedModel] = useState<string>(() => {
     if (typeof window === "undefined") return "default";
     return window.localStorage.getItem(PREFERRED_MODEL_KEY) ?? "default";
@@ -208,6 +209,7 @@ export default function Dashboard() {
         goal,
         repoUrl: repoUrl.trim() || null,
         model: selectedModel === "default" ? null : selectedModel,
+        requireApproval,
       }
     }, {
       onSuccess: (newRun) => {
@@ -277,6 +279,17 @@ export default function Dashboard() {
                 {createRun.isPending ? "Starting..." : <><Play className="w-4 h-4 mr-2" /> Start Run</>}
               </Button>
             </div>
+
+            {/* Human-in-the-loop: pause before committing changes */}
+            <label className="flex items-center gap-2 text-xs text-muted-foreground select-none cursor-pointer">
+              <Checkbox
+                checked={requireApproval}
+                onCheckedChange={(c) => setRequireApproval(c === true)}
+                disabled={createRun.isPending}
+                aria-label="Require approval before committing"
+              />
+              Require my approval before the agent commits its changes
+            </label>
 
             {/* GitHub repo URL toggle */}
             <div className="flex flex-col gap-2">

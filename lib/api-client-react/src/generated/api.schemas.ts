@@ -15,9 +15,11 @@ export type RunStatus = typeof RunStatus[keyof typeof RunStatus];
 export const RunStatus = {
   pending: 'pending',
   running: 'running',
+  awaiting_approval: 'awaiting_approval',
   completed: 'completed',
   failed: 'failed',
   cancelled: 'cancelled',
+  rejected: 'rejected',
 } as const;
 
 /**
@@ -52,6 +54,7 @@ export interface Run {
   prUrl?: string | null;
   /** @nullable */
   prStatus?: RunPrStatus;
+  requireApproval?: boolean;
   eventCount?: number;
   createdAt: string;
   /** @nullable */
@@ -151,6 +154,48 @@ export interface RunInput {
   repoBranch?: string | null;
   /** @nullable */
   prUrl?: string | null;
+  /** Pause at awaiting_approval; a human must approve before changes are committed. */
+  requireApproval?: boolean;
+}
+
+export type ApprovalStatus = typeof ApprovalStatus[keyof typeof ApprovalStatus];
+
+
+export const ApprovalStatus = {
+  pending: 'pending',
+  approved: 'approved',
+  rejected: 'rejected',
+} as const;
+
+export interface Approval {
+  id: string;
+  runId: string;
+  kind: string;
+  status: ApprovalStatus;
+  /** @nullable */
+  summary?: string | null;
+  createdAt: string;
+  /** @nullable */
+  resolvedAt?: string | null;
+}
+
+export type ApprovalDecisionDecision = typeof ApprovalDecisionDecision[keyof typeof ApprovalDecisionDecision];
+
+
+export const ApprovalDecisionDecision = {
+  approve: 'approve',
+  reject: 'reject',
+} as const;
+
+export interface ApprovalDecision {
+  decision: ApprovalDecisionDecision;
+}
+
+export interface ApprovalResult {
+  runId: string;
+  approvalId: string;
+  decision: string;
+  status: string;
 }
 
 export interface ForkInput {

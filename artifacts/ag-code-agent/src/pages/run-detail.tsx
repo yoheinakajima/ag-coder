@@ -36,6 +36,7 @@ import {
 } from "lucide-react";
 import { CausalGraph } from "@/components/CausalGraph";
 import { CausalChainPanel } from "@/components/CausalChainPanel";
+import { ApprovalBanner } from "@/components/ApprovalBanner";
 import type { AgentEvent, GraphObject, PermissionDecisionDecision } from "@workspace/api-client-react";
 import { toast } from "sonner";
 import { useElapsedTime } from "@/hooks/use-elapsed-time";
@@ -428,6 +429,8 @@ export default function RunDetail() {
           isPending={resolvePerm.isPending}
         />
       )}
+
+      <ApprovalBanner runId={runId} status={run?.status} />
 
       <div className="flex-1 overflow-hidden">
         <ResizablePanelGroup direction="vertical">

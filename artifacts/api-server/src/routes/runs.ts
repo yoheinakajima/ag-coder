@@ -7,7 +7,7 @@ import { mkdirSync, readdirSync, readFileSync, statSync, existsSync } from "fs";
 import path from "path";
 import { v4 as uuidv4 } from "uuid";
 
-import { db, runsTable, agentEventsTable, graphObjectsTable, graphRelationsTable } from "@workspace/db";
+import { db, runsTable, agentEventsTable, graphObjectsTable, graphRelationsTable, agentApprovalsTable } from "@workspace/db";
 import { pushBranchViaApi, createPullRequest, getPullRequestStatus, getGitHubAccessToken } from "../github-client.js";
 import { isValidRepoUrl } from "../lib/validate.js";
 import { runCreateRateLimiter } from "../middlewares/rate-limit.js";
@@ -195,7 +195,7 @@ router.post("/runs", runCreateRateLimiter, async (req, res) => {
   if (!parsed.success) {
     return res.status(400).json({ error: parsed.error.message });
   }
-  const { goal, model, repoUrl } = parsed.data;
+  const { goal, model, repoUrl, requireApproval } = parsed.data;
   if (repoUrl && !isValidRepoUrl(repoUrl)) {
     return res.status(400).json({ error: "repoUrl must be an https github.com owner/repo URL" });
   }
@@ -215,6 +215,7 @@ router.post("/runs", runCreateRateLimiter, async (req, res) => {
     model: model ?? null,
     workDir: resolvedWorkDir,
     repoUrl: repoUrl ?? null,
+    requireApproval: requireApproval ?? false,
     createdAt: new Date(),
   });
 
@@ -222,6 +223,7 @@ router.post("/runs", runCreateRateLimiter, async (req, res) => {
 
   const agentArgs = ["--run-id", runId, "--goal", goal, "--work-dir", resolvedWorkDir];
   if (repoUrl) agentArgs.push("--repo-url", repoUrl);
+  if (requireApproval) agentArgs.push("--require-approval");
 
   const agentEnv: Record<string, string> = { ...process.env as Record<string, string> };
   // Disable interactive git credential prompts so the agent's local clone/commit
@@ -413,6 +415,65 @@ router.get("/runs/:runId/causal-chain", async (req, res) => {
     return res.json(parsed);
   } catch (err) {
     return res.status(500).json({ error: "failed to compute causal chain", detail: String(err) });
+  }
+});
+
+// List a run's approvals (human-in-the-loop gate)
+router.get("/runs/:runId/approvals", async (req, res) => {
+  const { runId } = req.params;
+  const rows = await db
+    .select()
+    .from(agentApprovalsTable)
+    .where(eq(agentApprovalsTable.runId, runId));
+  return res.json(
+    rows.map((a) => ({
+      id: a.id,
+      runId: a.runId,
+      kind: a.kind,
+      status: a.status,
+      summary: a.summary ?? null,
+      createdAt: a.createdAt.toISOString(),
+      resolvedAt: a.resolvedAt?.toISOString() ?? null,
+    })),
+  );
+});
+
+// Resolve an approval (approve|reject) — finalizes the paused run
+router.post("/runs/:runId/approvals/:approvalId", async (req, res) => {
+  const { runId, approvalId } = req.params;
+  const decision = (req.body?.decision as string) ?? "";
+  if (decision !== "approve" && decision !== "reject") {
+    return res.status(400).json({ error: "decision must be 'approve' or 'reject'" });
+  }
+  const rows = await db
+    .select()
+    .from(agentApprovalsTable)
+    .where(eq(agentApprovalsTable.id, approvalId))
+    .limit(1);
+  if (!rows.length || rows[0]!.runId !== runId) {
+    return res.status(404).json({ error: "approval not found for this run" });
+  }
+  if (rows[0]!.status !== "pending") {
+    return res.status(409).json({ error: `approval already ${rows[0]!.status}` });
+  }
+
+  const workspaceRoot = path.resolve(process.cwd(), "../..");
+  const agentScript = path.join(workspaceRoot, "scripts/agent/run_agent.py");
+  try {
+    const { stdout } = await execFileAsync(
+      "python3",
+      [agentScript, "--run-id", runId, "--finalize", "--decision", decision],
+      { cwd: workspaceRoot, timeout: 120_000, maxBuffer: 2 * 1024 * 1024 },
+    );
+    // Re-read the resolved run + approval for the response.
+    const run = await db.select().from(runsTable).where(eq(runsTable.id, runId)).limit(1);
+    if (decision === "approve" && run[0]?.repoUrl) {
+      // Changes were committed during finalize; push + PR like a normal run.
+      void createPrAfterRun(runId, req.log);
+    }
+    return res.json({ runId, approvalId, decision, status: run[0]?.status ?? "unknown", detail: stdout.trim() });
+  } catch (err) {
+    return res.status(500).json({ error: "failed to finalize approval", detail: String(err) });
   }
 });
 
