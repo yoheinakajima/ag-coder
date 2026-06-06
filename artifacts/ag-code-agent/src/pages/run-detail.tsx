@@ -35,6 +35,7 @@ import {
   Play, Pause, ChevronRight, SkipBack, Rewind
 } from "lucide-react";
 import { CausalGraph } from "@/components/CausalGraph";
+import { CausalChainPanel } from "@/components/CausalChainPanel";
 import type { AgentEvent, GraphObject, PermissionDecisionDecision } from "@workspace/api-client-react";
 import { toast } from "sonner";
 import { useElapsedTime } from "@/hooks/use-elapsed-time";
@@ -103,6 +104,7 @@ export default function RunDetail() {
   const [streamEvents, setStreamEvents] = useState<AgentEvent[]>([]);
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
   const [highlightedEventId, setHighlightedEventId] = useState<string | null>(null);
+  const [selectedNode, setSelectedNode] = useState<GraphObject | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const isRunning = run?.status === "running" || run?.status === "pending";
@@ -230,8 +232,10 @@ export default function RunDetail() {
   const handleGraphNodeSelect = useCallback((obj: GraphObject | null) => {
     if (!obj) {
       setHighlightedEventId(null);
+      setSelectedNode(null);
       return;
     }
+    setSelectedNode(obj);
     // Patch nodes → open file in browser panel
     if (obj.type === "patch") {
       const path = strField(obj.data?.path);
@@ -435,11 +439,20 @@ export default function RunDetail() {
                   <div className="h-10 px-4 flex items-center border-b border-border/50 bg-muted/20 font-mono text-xs font-semibold text-muted-foreground uppercase tracking-wider">
                     Causal Graph
                   </div>
-                  <CausalGraph
-                    objects={replayObjects}
-                    relations={replayRelations}
-                    onNodeSelect={handleGraphNodeSelect}
-                  />
+                  <div className="flex-1 min-h-0 overflow-auto">
+                    <CausalGraph
+                      objects={replayObjects}
+                      relations={replayRelations}
+                      onNodeSelect={handleGraphNodeSelect}
+                    />
+                  </div>
+                  <div className="border-t border-border/50 max-h-[40%] overflow-auto bg-muted/10">
+                    <CausalChainPanel
+                      runId={runId}
+                      objectId={selectedNode?.id ?? null}
+                      objectLabel={selectedNode?.type}
+                    />
+                  </div>
                 </div>
               </ResizablePanel>
               

@@ -21,11 +21,13 @@ import type {
 
 import type {
   AgentEvent,
+  CausalChain,
   FileContent,
   FileEntry,
   ForkInput,
   GetFileContentParams,
   GetGithubReposParams,
+  GetRunCausalChainParams,
   GetRunFileContentParams,
   GithubRepoList,
   GraphState,
@@ -569,6 +571,95 @@ export function useGetRunGraph<TData = Awaited<ReturnType<typeof getRunGraph>>, 
  ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
 
   const queryOptions = getGetRunGraphQueryOptions(runId,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+
+
+
+export const getGetRunCausalChainUrl = (runId: string,
+    params: GetRunCausalChainParams,) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? 'null' : value.toString())
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0 ? `/api/runs/${runId}/causal-chain?${stringifiedParams}` : `/api/runs/${runId}/causal-chain`
+}
+
+/**
+ * @summary ActiveGraph's native causal_chain provenance walk for one object
+ */
+export const getRunCausalChain = async (runId: string,
+    params: GetRunCausalChainParams, options?: RequestInit): Promise<CausalChain> => {
+
+  return customFetch<CausalChain>(getGetRunCausalChainUrl(runId,params),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getGetRunCausalChainQueryKey = (runId: string,
+    params?: GetRunCausalChainParams,) => {
+    return [
+    `/api/runs/${runId}/causal-chain`, ...(params ? [params] : [])
+    ] as const;
+    }
+
+
+export const getGetRunCausalChainQueryOptions = <TData = Awaited<ReturnType<typeof getRunCausalChain>>, TError = ErrorType<void>>(runId: string,
+    params: GetRunCausalChainParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getRunCausalChain>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetRunCausalChainQueryKey(runId,params);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getRunCausalChain>>> = ({ signal }) => getRunCausalChain(runId,params, { signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, enabled: !!(runId), ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getRunCausalChain>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type GetRunCausalChainQueryResult = NonNullable<Awaited<ReturnType<typeof getRunCausalChain>>>
+export type GetRunCausalChainQueryError = ErrorType<void>
+
+
+/**
+ * @summary ActiveGraph's native causal_chain provenance walk for one object
+ */
+
+export function useGetRunCausalChain<TData = Awaited<ReturnType<typeof getRunCausalChain>>, TError = ErrorType<void>>(
+ runId: string,
+    params: GetRunCausalChainParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getRunCausalChain>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getGetRunCausalChainQueryOptions(runId,params,options)
 
   const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
 

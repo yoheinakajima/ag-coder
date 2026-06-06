@@ -310,6 +310,14 @@ export interface FileContent {
   size?: number;
 }
 
+export interface CausalChain {
+  runId: string;
+  /** Local graph object id the chain was computed for */
+  objectId: string;
+  /** ActiveGraph's causal_chain rendering — the object walked back through its LLM/tool calls and triggering events up to goal.created. */
+  chain: string;
+}
+
 export interface GithubRepo {
   /** owner/repo */
   fullName: string;
@@ -320,6 +328,13 @@ export interface GithubRepo {
 export interface GithubRepoList {
   repos: GithubRepo[];
 }
+
+export type GetRunCausalChainParams = {
+/**
+ * Scoped or local graph object id to trace back to the goal
+ */
+objectId: string;
+};
 
 export type GetRunFileContentParams = {
 path: string;

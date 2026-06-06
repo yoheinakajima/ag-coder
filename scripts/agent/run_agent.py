@@ -239,6 +239,41 @@ def _fork_native_log(new_run_id: str, parent_run_id: str, at_native_event_id: st
     return store, conn, copied
 
 
+def _causal_chain_json(run_id: str, object_id: str) -> dict:
+    """Compute ActiveGraph's native causal_chain for an object in a stored run.
+
+    Replays the run's authoritative event log into a fresh Graph and calls the
+    framework's ``causal_chain`` — the same provenance walk the runtime records,
+    not the app's hand-built relations. Accepts a scoped (``<run8>:patch#3``) or
+    local (``patch#3``) object id. Returns ``{run_id, object_id, chain}``.
+    """
+    conn = _open_native_store_conn()
+    if conn is None:
+        return {"error": "native event store unavailable", "run_id": run_id, "object_id": object_id}
+    try:
+        from activegraph import Graph
+        from activegraph.store.postgres import PostgresEventStore
+        from activegraph.trace.causal import causal_chain
+
+        store = PostgresEventStore(conn, run_id)
+        graph = Graph(run_id=run_id)
+        n = 0
+        for ev in store.iter_events():
+            graph._replay_event(ev)  # noqa: SLF001 — framework replay seam
+            n += 1
+        if n == 0:
+            return {"error": "no native event log for this run", "run_id": run_id, "object_id": object_id}
+        local_id = object_id.split(":", 1)[1] if ":" in object_id else object_id
+        return {"run_id": run_id, "object_id": local_id, "chain": causal_chain(graph, local_id)}
+    except Exception as exc:  # pragma: no cover - defensive
+        return {"error": str(exc), "run_id": run_id, "object_id": object_id}
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
 def _clear_ui_rows(app_conn, run_id: str) -> None:
     with app_conn.cursor() as cur:
         cur.execute("DELETE FROM agent_events WHERE run_id = %s", (run_id,))
@@ -1472,7 +1507,22 @@ def main():
         default=None,
         help="Event id (UI agent_events.id or native evt_*) to fork at. Requires --fork-from.",
     )
+    parser.add_argument(
+        "--causal-chain",
+        default=None,
+        metavar="OBJECT_ID",
+        help=(
+            "Don't run the agent: print (as JSON) ActiveGraph's own causal_chain "
+            "for the given object in --run-id, walking provenance back through the "
+            "tool/LLM calls to the goal. Accepts a scoped or local object id."
+        ),
+    )
     args = parser.parse_args()
+
+    # ── Causal-chain mode: framework-native provenance walk for one object ─────
+    if args.causal_chain:
+        print(json.dumps(_causal_chain_json(args.run_id, args.causal_chain)))
+        return
 
     # ── Rebuild mode: re-project an existing run from the native store ─────────
     if args.rebuild_projection:

@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { eq, desc, count, inArray, sql } from "drizzle-orm";
-import { spawn, exec } from "child_process";
+import { spawn, exec, execFile } from "child_process";
 import { promisify } from "util";
 import { mkdirSync, readdirSync, readFileSync, statSync, existsSync } from "fs";
 
@@ -26,6 +26,7 @@ import {
 } from "@workspace/api-zod";
 
 const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 const router = Router();
 
@@ -388,6 +389,31 @@ router.get("/runs/:runId/graph", async (req, res) => {
       type: rel.relationType,
     })),
   });
+});
+
+// Causal chain for one graph object — ActiveGraph's OWN provenance walk
+// (trace/causal.causal_chain) over the framework's authoritative event log,
+// not the app's hand-built relations. Shells out to the agent's --causal-chain
+// mode so the framework computes it natively.
+router.get("/runs/:runId/causal-chain", async (req, res) => {
+  const { runId } = req.params;
+  const objectId = typeof req.query.objectId === "string" ? req.query.objectId : "";
+  if (!objectId) return res.status(400).json({ error: "objectId query param is required" });
+
+  const workspaceRoot = path.resolve(process.cwd(), "../..");
+  const agentScript = path.join(workspaceRoot, "scripts/agent/run_agent.py");
+  try {
+    const { stdout } = await execFileAsync(
+      "python3",
+      [agentScript, "--run-id", runId, "--causal-chain", objectId],
+      { cwd: workspaceRoot, timeout: 30_000, maxBuffer: 2 * 1024 * 1024 },
+    );
+    const parsed = JSON.parse(stdout.trim() || "{}");
+    if (parsed.error) return res.status(404).json(parsed);
+    return res.json(parsed);
+  } catch (err) {
+    return res.status(500).json({ error: "failed to compute causal chain", detail: String(err) });
+  }
 });
 
 // List files in a run's work directory

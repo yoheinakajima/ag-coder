@@ -141,6 +141,33 @@ paths:
               schema:
                 $ref: "#/components/schemas/GraphState"
 
+  /runs/{runId}/causal-chain:
+    get:
+      operationId: getRunCausalChain
+      tags: [runs]
+      summary: ActiveGraph's native causal_chain provenance walk for one object
+      parameters:
+        - name: runId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: objectId
+          in: query
+          required: true
+          description: Scoped or local graph object id to trace back to the goal
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Causal chain
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CausalChain"
+        "404":
+          description: Object or run not found
+
   /runs/{runId}/files:
     get:
       operationId: listRunFiles
@@ -769,6 +796,21 @@ components:
           type: ["string", "null"]
         size:
           type: integer
+
+    CausalChain:
+      type: object
+      required: [runId, objectId, chain]
+      properties:
+        runId:
+          type: string
+        objectId:
+          type: string
+          description: Local graph object id the chain was computed for
+        chain:
+          type: string
+          description: >-
+            ActiveGraph's causal_chain rendering — the object walked back through
+            its LLM/tool calls and triggering events up to goal.created.
 
     GithubRepo:
       type: object

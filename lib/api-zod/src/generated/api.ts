@@ -166,6 +166,24 @@ export const GetRunGraphResponse = zod.object({
 
 
 /**
+ * @summary ActiveGraph's native causal_chain provenance walk for one object
+ */
+export const GetRunCausalChainParams = zod.object({
+  "runId": zod.coerce.string()
+})
+
+export const GetRunCausalChainQueryParams = zod.object({
+  "objectId": zod.coerce.string().describe('Scoped or local graph object id to trace back to the goal')
+})
+
+export const GetRunCausalChainResponse = zod.object({
+  "runId": zod.string(),
+  "objectId": zod.string().describe('Local graph object id the chain was computed for'),
+  "chain": zod.string().describe('ActiveGraph\'s causal_chain rendering — the object walked back through its LLM\/tool calls and triggering events up to goal.created.')
+})
+
+
+/**
  * @summary List files in a run's work directory
  */
 export const ListRunFilesParams = zod.object({
