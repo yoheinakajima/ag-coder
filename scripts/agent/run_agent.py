@@ -156,6 +156,97 @@ def _open_native_store(run_id: str):
         return None, None
 
 
+def _open_native_store_conn():
+    """Open a psycopg 3 connection scoped to the native store's schema, or None."""
+    if not DATABASE_URL:
+        return None
+    try:
+        import psycopg
+    except Exception:
+        return None
+    try:
+        conn = psycopg.connect(DATABASE_URL, autocommit=True)
+        with conn.cursor() as cur:
+            cur.execute(f'CREATE SCHEMA IF NOT EXISTS "{NATIVE_STORE_SCHEMA}"')
+            cur.execute(f'SET search_path TO "{NATIVE_STORE_SCHEMA}"')
+        return conn
+    except Exception:
+        return None
+
+
+def _read_native_events(run_id: str) -> list:
+    """Read a run's full native event log (for pre-populating replay caches)."""
+    conn = _open_native_store_conn()
+    if conn is None:
+        return []
+    try:
+        from activegraph.store.postgres import PostgresEventStore
+        store = PostgresEventStore(conn, run_id)
+        return list(store.iter_events())
+    except Exception:
+        return []
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def _resolve_native_event_id(app_conn, parent_run_id: str, ui_event_id: str) -> Optional[str]:
+    """Map a UI event id (agent_events.id) to the framework's native event id.
+
+    The mirror stamps ``_src_event_id`` (the native event id) into every
+    projected event's payload; this reads it back so a fork can target the
+    framework's authoritative log. If the value already looks like a native id
+    (``evt_*``), it is used as-is.
+    """
+    if ui_event_id and ui_event_id.startswith("evt_"):
+        return ui_event_id
+    with app_conn.cursor() as cur:
+        cur.execute(
+            "SELECT payload->>'_src_event_id' FROM agent_events WHERE run_id = %s AND id = %s",
+            (parent_run_id, ui_event_id),
+        )
+        row = cur.fetchone()
+    return row[0] if row and row[0] else None
+
+
+def _fork_native_log(new_run_id: str, parent_run_id: str, at_native_event_id: str,
+                     label: Optional[str] = None):
+    """Branch a run by copying the parent's native event log up to and including
+    ``at_native_event_id`` into ``new_run_id`` — ActiveGraph's real fork
+    primitive (``PostgresEventStore.fork_run``), the Postgres analogue of the
+    SQLite-only ``Runtime.fork``.
+
+    Returns ``(store, conn, copied_count)``; raises on failure (a fork that
+    can't branch the lineage should fail loudly, unlike the additive store).
+    """
+    import psycopg  # noqa: F401 — ensure the dep is present before we promise a fork
+    from activegraph.store.postgres import PostgresEventStore
+
+    conn = _open_native_store_conn()
+    if conn is None:
+        raise RuntimeError("native PostgresEventStore unavailable — cannot fork")
+    copied = PostgresEventStore.fork_run(
+        conn,
+        parent_run_id=parent_run_id,
+        new_run_id=new_run_id,
+        at_event_id=at_native_event_id,
+        label=label,
+        created_at=now_iso(),
+    )
+    store = PostgresEventStore(conn, new_run_id)
+    return store, conn, copied
+
+
+def _clear_ui_rows(app_conn, run_id: str) -> None:
+    with app_conn.cursor() as cur:
+        cur.execute("DELETE FROM agent_events WHERE run_id = %s", (run_id,))
+        cur.execute("DELETE FROM graph_objects WHERE run_id = %s", (run_id,))
+        cur.execute("DELETE FROM graph_relations WHERE run_id = %s", (run_id,))
+    app_conn.commit()
+
+
 # ── The UI projection mirror ────────────────────────────────────────────────────
 
 
@@ -215,6 +306,11 @@ class PostgresMirror:
         self._run_id = run_id
         self._graph = graph
         self._seq = 0
+        # The native event id currently being projected. Stamped into every
+        # agent_events row so a UI-selected event can be mapped back to the
+        # framework's authoritative event log (enables native fork — see
+        # _resolve_native_event_id).
+        self._src_event_id: Optional[str] = None
 
     # The listener entry point. Must never raise into graph.emit / the runtime
     # loop, so failures are caught and surfaced as a mirror.error event.
@@ -235,6 +331,11 @@ class PostgresMirror:
     def _record(self, event_type: str, payload: dict) -> str:
         self._seq += 1
         event_id = str(uuid.uuid4())
+        # Carry the source native event id so the UI/API can fork at this point
+        # by mapping back to the framework's event log. Non-destructive: the UI
+        # ignores unknown payload keys.
+        if self._src_event_id is not None and "_src_event_id" not in payload:
+            payload = {**payload, "_src_event_id": self._src_event_id}
         with self._conn.cursor() as cur:
             cur.execute(
                 """
@@ -281,6 +382,7 @@ class PostgresMirror:
         replay path both call this, so the projection is identical whether it
         runs live or is reconstructed from the native store.
         """
+        self._src_event_id = getattr(event, "id", None)
         etype = event.type
         payload = event.payload or {}
 
@@ -659,30 +761,104 @@ def _git_commit(run_id: str, goal: str, branch_name: str, work_dir: str, conn, g
 MAX_FIX_ATTEMPTS = 1
 
 
-def run_with_activegraph(run_id: str, goal: str, work_dir: str, conn, repo_url: str | None = None):
-    """Run the coding agent using the ActiveGraph runtime, event-driven end to end."""
+def run_with_activegraph(run_id: str, goal: str, work_dir: str, conn,
+                         repo_url: str | None = None,
+                         fork_from: tuple[str, str] | None = None):
+    """Run the coding agent using the ActiveGraph runtime, event-driven end to end.
+
+    When ``fork_from=(parent_run_id, ui_event_id)`` is given, the run is a real
+    ActiveGraph fork: the parent's native event log up to that event is copied
+    into this run (shared lineage), replayed into the graph, and projected into
+    the UI tables — then the agent continues forward on top of that inherited
+    history, with the parent's LLM/tool responses pre-loaded into replay caches.
+    """
     try:
         from activegraph import Graph, Runtime, behavior
+        from activegraph.core.ids import IDGen
     except ImportError as e:
         raise RuntimeError(f"activegraph not installed: {e}")
 
-    graph = Graph()
+    native_store = None
+    native_store_conn = None
+    replay_caches: dict[str, Any] = {}
+    fork_lineage: tuple[str, str] | None = None
 
-    # Authoritative log: attach ActiveGraph's native PostgresEventStore so the
-    # runtime durably persists every event it emits (Graph.emit -> store.append)
-    # to the framework's own schema-versioned, forkable, replayable tables. Must
-    # be attached BEFORE any event is emitted. Best-effort: if the optional
-    # store dependency is missing the run still proceeds on the UI projection.
-    native_store, native_store_conn = _open_native_store(run_id)
-    if native_store is not None:
-        graph.attach_store(native_store)
+    # A real lineage fork requires the parent's native event log. If anything in
+    # the branch fails (parent predates the native store, event not found, store
+    # unavailable), degrade to a fresh continuation and note why — never fail the
+    # run over an un-forkable parent.
+    fork_degraded: tuple[str, str, str] | None = None
+    graph = None
+    if fork_from is not None:
+        parent_run_id, ui_event_id = fork_from
+        try:
+            at_native = _resolve_native_event_id(conn, parent_run_id, ui_event_id)
+            if at_native is None:
+                raise RuntimeError("parent has no native lineage for this event")
+            native_store, native_store_conn, copied = _fork_native_log(run_id, parent_run_id, at_native)
+            fork_lineage = (parent_run_id, at_native)
+            copied_events = list(native_store.iter_events())
 
-    # UI read-model: one listener PROJECTS the runtime's event stream into the
-    # denormalized tables the UI reads. Registered before the runtime so it
-    # observes every event. This is a downstream view of the authoritative log
-    # above — not a parallel source of truth (see PostgresMirror docstring).
-    mirror = PostgresMirror(conn, run_id, graph)
-    graph.add_listener(mirror)
+            # Rebuild graph state from the copied prefix and continue from there.
+            graph = Graph(ids=IDGen(), run_id=run_id)
+            for ev in copied_events:
+                graph._replay_event(ev)  # noqa: SLF001 — framework replay seam
+            graph.ids.reseed_from_events(copied_events)
+            graph.attach_store(native_store)
+
+            # Project the inherited prefix into the UI tables through ONE mirror
+            # so the seq counter stays monotonic when live events follow.
+            mirror = PostgresMirror(conn, run_id, graph)
+            _clear_ui_rows(conn, run_id)
+            for ev in copied_events:
+                mirror.project(ev)
+            graph.add_listener(mirror)
+
+            # Pre-load replay caches from the PARENT's full log so any identical
+            # LLM/tool call on the fork serves from cache instead of re-spending.
+            parent_events = _read_native_events(parent_run_id)
+            try:
+                from activegraph.llm.cache import LLMCache
+                from activegraph.tools.cache import ToolCache
+                replay_caches = dict(
+                    replay_llm_cache=True,
+                    llm_cache=LLMCache.from_events(parent_events),
+                    replay_tool_cache=True,
+                    tool_cache=ToolCache.from_events(parent_events),
+                )
+            except Exception:
+                replay_caches = {}
+        except Exception as exc:
+            # Could not branch lineage — degrade to a fresh continuation.
+            fork_degraded = (parent_run_id, ui_event_id, str(exc))
+            fork_lineage = None
+            replay_caches = {}
+            graph = None
+            if native_store_conn is not None:
+                try:
+                    native_store_conn.close()
+                except Exception:
+                    pass
+            native_store = None
+            native_store_conn = None
+
+    if graph is None:
+        # ── Fresh run: native store as authoritative log + UI projection ───────
+        graph = Graph()
+        native_store, native_store_conn = _open_native_store(run_id)
+        if native_store is not None:
+            graph.attach_store(native_store)
+        mirror = PostgresMirror(conn, run_id, graph)
+        graph.add_listener(mirror)
+        if fork_degraded is not None:
+            _emit_event(graph, "assistant.message.added", {
+                "role": "assistant",
+                "content": (
+                    f"Note: parent run {fork_degraded[0]} has no native event log for "
+                    f"event {fork_degraded[1]}, so this run could not inherit its lineage. "
+                    f"Running as a fresh continuation instead."
+                ),
+            })
 
     # Check for an LLM provider; absent one, the agent runs the deterministic demo.
     has_anthropic = bool(os.environ.get("ANTHROPIC_API_KEY"))
@@ -848,7 +1024,7 @@ def run_with_activegraph(run_id: str, goal: str, work_dir: str, conn, repo_url: 
         bgraph.emit("task.ready", {"task_id": fix_task.id})
 
     budget = {"max_events": 500, "max_seconds": 300}
-    runtime = Runtime(graph, budget=budget, llm_provider=llm_provider)
+    runtime = Runtime(graph, budget=budget, llm_provider=llm_provider, **replay_caches)
 
     try:
         # ── Git: clone + branch before the task loop ──────────────────────────
@@ -858,8 +1034,29 @@ def run_with_activegraph(run_id: str, goal: str, work_dir: str, conn, repo_url: 
             if not ok:
                 raise RuntimeError("git clone or branch creation failed — see tool.error events")
 
-        _emit_event(graph, "run.started", {"run_id": run_id, "goal": goal})
+        if fork_lineage is not None:
+            _emit_event(graph, "run.forked", {
+                "run_id": run_id,
+                "goal": goal,
+                "parent_run_id": fork_lineage[0],
+                "forked_at_event_id": fork_lineage[1],
+            })
+        else:
+            _emit_event(graph, "run.started", {"run_id": run_id, "goal": goal})
         runtime.run_goal(goal)
+
+        # run_goal's internal upsert_run nulls the fork lineage columns; re-assert
+        # them so the native store records the parent linkage (CONTRACT v0.5 #11).
+        if fork_lineage is not None and native_store is not None:
+            try:
+                native_store.upsert_run(
+                    parent_run_id=fork_lineage[0],
+                    forked_at_event_id=fork_lineage[1],
+                    created_at=now_iso(),
+                    goal=goal,
+                )
+            except Exception:
+                pass
 
         # ── Git: commit changes locally after the task loop ───────────────────
         # The commit is pushed to the remote by the API server via the GitHub
@@ -1284,6 +1481,19 @@ def main():
             "UI tables are a derived view of the framework's authoritative log."
         ),
     )
+    parser.add_argument(
+        "--fork-from",
+        default=None,
+        help=(
+            "Parent run id to fork from. Copies the parent's native event log up "
+            "to --at-event into this run (shared lineage) and continues forward."
+        ),
+    )
+    parser.add_argument(
+        "--at-event",
+        default=None,
+        help="Event id (UI agent_events.id or native evt_*) to fork at. Requires --fork-from.",
+    )
     args = parser.parse_args()
 
     # ── Rebuild mode: re-project an existing run from the native store ─────────
@@ -1309,6 +1519,12 @@ def main():
     if not args.goal:
         parser.error("--goal is required unless --rebuild-projection is set")
 
+    fork_from = None
+    if args.fork_from or args.at_event:
+        if not (args.fork_from and args.at_event):
+            parser.error("--fork-from and --at-event must be provided together")
+        fork_from = (args.fork_from, args.at_event)
+
     # Disable interactive git credential prompts. GIT_ASKPASS (Replit's
     # replit-git-askpass) has no TTY in a detached subprocess and would cause
     # local git operations (clone over public HTTPS, status, commit) to hang.
@@ -1322,7 +1538,8 @@ def main():
         conn = get_conn()
         update_run_status(conn, args.run_id, "running")
 
-        run_with_activegraph(args.run_id, args.goal, args.work_dir, conn, repo_url=args.repo_url)
+        run_with_activegraph(args.run_id, args.goal, args.work_dir, conn,
+                             repo_url=args.repo_url, fork_from=fork_from)
         update_run_status(conn, args.run_id, "completed")
 
     except KeyboardInterrupt:

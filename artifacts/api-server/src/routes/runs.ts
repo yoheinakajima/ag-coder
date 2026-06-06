@@ -618,6 +618,10 @@ router.post("/runs/:runId/fork", runCreateRateLimiter, async (req, res) => {
   const agentScript = path.join(forkWorkspaceRoot, "scripts/agent/run_agent.py");
   const forkAgentArgs = ["--run-id", newRunId, "--goal", effectiveGoal, "--work-dir", resolvedWorkDir];
   if (effectiveRepoUrl) forkAgentArgs.push("--repo-url", effectiveRepoUrl);
+  // Real ActiveGraph fork: copy the parent's native event log up to the chosen
+  // event into this run (shared lineage), then continue. The agent degrades to
+  // a fresh continuation if the parent predates the native store.
+  if (atEventId) forkAgentArgs.push("--fork-from", runId, "--at-event", atEventId);
 
   const forkAgentEnv: Record<string, string> = { ...process.env as Record<string, string> };
   // Pushing is handled in Node via the GitHub REST API (pushBranchViaApi); the

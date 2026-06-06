@@ -69,17 +69,21 @@ events, objects, and relations all identical (including row ids). That is the
 prototype's thesis made concrete: the UI tables are a pure, reproducible
 function of ActiveGraph's authoritative log.
 
-## What this unlocks (next steps)
+## What this unlocks
 
 With the framework's log now authoritative, the remaining Tier-1 items become
 tractable rather than bespoke:
 
-- **Real fork** — replace the cosmetic "spawn a new run" fork with
-  `PostgresEventStore.fork_run()` / `Runtime.fork(at_event)`, which copies the
-  event log up to a chosen event and branches with shared lineage.
-- **Replay / time-travel** — `Runtime.load()` + `replay_llm_cache` /
-  `replay_tool_cache` to re-run a stored run deterministically without spending
-  tokens.
+- **Real fork — done** (`docs/tier1-native-fork.md`). The cosmetic "spawn a new
+  run" fork is replaced with `PostgresEventStore.fork_run()`: the parent's
+  native event log up to the chosen event is copied into the new run (shared
+  lineage), replayed into the graph and projected into the UI, then the agent
+  continues forward with the parent's LLM/tool responses pre-loaded into
+  `replay_llm_cache` / `replay_tool_cache`.
+- **Replay / time-travel — partial.** `rebuild_ui_projection` already replays a
+  stored run's events to reconstruct the UI byte-for-byte; the fork path uses
+  the framework replay caches so an identical re-derivation serves from cache
+  instead of the API.
 - **Retire the bespoke projection write-path** — once the API reads can be
   pointed at a view/materialization over `activegraph.events`, the hand-written
   mirror can shrink to a thin read-model mapper.
