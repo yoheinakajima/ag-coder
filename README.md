@@ -10,6 +10,8 @@ The result is a developer cockpit for watching an agent work. You give it a goal
 
 This repo is not trying to be a production IDE or a Cursor replacement. It is a reference implementation for a different way to build agents: graph-native, event-driven, and auditable by default.
 
+![The AG Coder run view: a causal graph, agent conversation, file changes, and a live event stream for a single run.](./docs/images/four-panel-view.png)
+
 ---
 
 ## Why this exists
