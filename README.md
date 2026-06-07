@@ -289,4 +289,4 @@ This is not intended to be a full production coding environment, IDE replacement
 
 ## License
 
-[MIT](./LICENSE)
+[Apache License 2.0](./LICENSE)
