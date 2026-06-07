@@ -57,7 +57,7 @@ Each line follows the documented schema (`timestamp`, `level`, `logger`,
 ## 4. The `activegraph` CLI on the native store
 
 The authoritative event log lives in the **`activegraph` Postgres schema** (see
-`docs/tier1-native-event-store.md`). Point the framework's own CLI at it by
+`docs/native-event-store.md`). Point the framework's own CLI at it by
 setting the search path in the connection URL:
 
 ```bash

@@ -1,15 +1,15 @@
-# Tier 2 — the auditability + safety story the README claims
+# Auditability + safety
 
-> Status: prototype. Builds on the Tier-1 work (native event store, the runtime
-> owning the LLM/tool loop, real fork + replay). Three changes that make the
-> "show its work" and "stay safe" claims real, using ActiveGraph's own primitives.
+Three features that make the README's "show its work" and "stay safe" claims
+concrete, each built on an ActiveGraph primitive: native `causal_chain()`,
+`Policy` + human-in-the-loop approvals, and `Frame` + a cost budget. They build on
+the native event store and the runtime owning the LLM/tool loop.
 
-## 4. Native `causal_chain()` in the UI
+## 1. Native `causal_chain()` in the UI
 
 The README's pitch is "walk the edge back from the patch to the model call to the
 task to the goal." That walk is a built-in ActiveGraph function
-(`activegraph.trace.causal.causal_chain`) — the project used to reconstruct
-causality by hand from `graph_relations`. Now the UI shows the framework's own
+(`activegraph.trace.causal.causal_chain`), and the UI surfaces the framework's own
 chain.
 
 - **Agent:** `--causal-chain <objectId>` replays a run's authoritative event log
@@ -30,13 +30,13 @@ chain.
         ← user (evt_002) goal.created
   ```
 
-This works because Tier-1 made the runtime own the loop and stamp provenance —
-the chain is real `caused_by` lineage, not hand-built edges.
+This works because the runtime owns the loop and stamps provenance — the chain is
+real `caused_by` lineage, not hand-built edges.
 
-## 5. Policy + human-in-the-loop approvals
+## 2. Policy + human-in-the-loop approvals
 
-Replaces the hand-rolled `PROTECTED_PATHS` / `DANGEROUS_COMMANDS` with
-ActiveGraph's `Policy` and adds a real "approve before commit" gate.
+Capabilities are declared as an ActiveGraph `Policy`, and a real "approve before
+commit" gate sits in front of any committed change.
 
 - **Policy:** a `Policy` is attached to the Runtime declaring the agent's
   capabilities (`can_call_tool`, `can_create`, `requires_approval`). Blocked
@@ -52,19 +52,19 @@ ActiveGraph's `Policy` and adds a real "approve before commit" gate.
   `{decision}`; an `ApprovalBanner` (Approve/Reject) on a paused run and a
   "require my approval" checkbox on the new-run form.
 
-**Why the gate is at run completion, not mid-loop:** Tier-1 handed the LLM→tool
-turn loop to the runtime (`@llm_behavior`), so the natural human checkpoint is
-the finished patch-set, not an individual tool call. The agent makes changes in a
-per-run work dir and nothing is committed/pushed until a human approves.
+**Why the gate is at run completion, not mid-loop:** the runtime owns the LLM→tool
+turn loop (`@llm_behavior`), so the natural human checkpoint is the finished
+patch-set, not an individual tool call. The agent makes changes in a per-run work
+dir and nothing is committed/pushed until a human approves.
 
-## 6. `Frame` + `max_cost_usd` cost budgeting
+## 3. `Frame` + `max_cost_usd` cost budgeting
 
 - **Frame:** a `Frame(goal, constraints, success_criteria)` is attached to the
   Runtime, so the framework stamps `frame_id` provenance on every
   object/relation/event — the whole run is tagged with the mission it served.
 - **Cost budget:** `max_cost_usd` (env `AGENT_MAX_COST_USD`, default `$1.00`)
-  enables the runtime's real token-based pre-call cost gate; a run that would
-  exceed the ceiling stops with `budget.cost_exhausted` before spending.
+  enables the runtime's token-based pre-call cost gate; a run that would exceed the
+  ceiling stops with `budget.cost_exhausted` before spending.
 
 ### A framework bug this surfaced (and the fix)
 
@@ -76,10 +76,10 @@ them). Without a fix, turning on cost gating breaks every multi-turn tool run.
 We wrap the provider to make `count_tokens` use the same message conversion
 `complete()` does (`_anthropic_provider` in `run_agent.py`).
 
-## Migration note
+## Setup
 
-The approval flow adds a `runs.require_approval` column and an `agent_approvals`
-table. Apply with:
+The approval flow requires a `runs.require_approval` column and an
+`agent_approvals` table. Apply the schema with:
 
 ```bash
 pnpm --filter @workspace/db run push
