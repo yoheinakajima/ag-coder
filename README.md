@@ -277,11 +277,11 @@ This is not intended to be a full production coding environment, IDE replacement
 ## Deeper docs
 
 - [Building a coding agent you can actually audit — with ActiveGraph](./docs/building-with-activegraph.md) — the deeper technical walkthrough of how AG Coder is built on ActiveGraph.
-- How AG Coder leans on ActiveGraph's own primitives (recent architecture work):
-  - [Native event store as the authoritative log](./docs/tier1-native-event-store.md)
-  - [The runtime owns the LLM + tool loop (`@tool` / `@llm_behavior`)](./docs/tier1-tools-and-llm-behavior.md)
-  - [Real fork + replay built on `PostgresEventStore.fork_run`](./docs/tier1-native-fork.md)
-  - [Auditability + safety: native `causal_chain`, `Policy` + approvals, `Frame` + cost budget](./docs/tier2-auditability-and-safety.md)
+- How AG Coder builds on ActiveGraph's primitives:
+  - [Native event store as the authoritative log](./docs/native-event-store.md)
+  - [The runtime owns the LLM + tool loop (`@tool` / `@llm_behavior`)](./docs/tools-and-llm-behavior.md)
+  - [Fork + replay built on `PostgresEventStore.fork_run`](./docs/fork-and-replay.md)
+  - [Auditability + safety: native `causal_chain`, `Policy` + approvals, `Frame` + cost budget](./docs/auditability-and-safety.md)
   - [Operating AG Coder: RuntimeStatus, Prometheus, logging, and the `activegraph` CLI](./docs/operating-ag-coder.md)
   - The coding domain is declared as a typed [`Pack`](./scripts/agent/coding_pack.py) (object/relation schemas + a pattern behavior).
 - [Contributing](./CONTRIBUTING.md) — setup, conventions, and the contract-first API workflow.

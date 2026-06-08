@@ -94,17 +94,18 @@ that shape.
 
 ### The runtime owns the LLM + tool loop
 
-This is the part most agents hand-roll. AG Coder doesn't. `read_file`,
-`write_file`, `edit_file`, and `bash` are first-class `@tool`s with Pydantic
-input/output schemas, and the executor is an `@llm_behavior`. The **runtime**
-owns the turn loop: it assembles the prompt, calls the provider, emits
+This is the part most agents hand-roll; in AG Coder the runtime owns it.
+`read_file`, `write_file`, `edit_file`, and `bash` are first-class `@tool`s with
+Pydantic input/output schemas, and the executor is an `@llm_behavior`. The
+**runtime** owns the turn loop: it assembles the prompt, calls the provider, emits
 `llm.requested` / `llm.responded`, dispatches `tool.requested` /
 `tool.responded`, validates I/O against the schemas, and stamps provenance. The
 developer handler runs once, at the end, and turns the recorded tool events into
 the graph's `patch` / `file_snapshot` / `command_result` objects.
 
 The payoff is that the LLM and tool activity _is_ the trace — typed framework
-events with `caused_by` lineage — not a parallel narrative reconstructed by hand.
+events with `caused_by` lineage — so the causal graph is the framework's, not a
+parallel narrative assembled separately.
 
 ### Durable, forkable, replayable — for free
 
@@ -117,7 +118,7 @@ event automatically. That single fact unlocks:
   event into a new run (shared lineage), which the agent then continues forward
   on — with the parent's LLM/tool responses pre-loaded into `replay_llm_cache` /
   `replay_tool_cache` so identical re-derivations don't re-spend. The Fork UI is
-  backed by a real lineage fork, not a cosmetic re-run.
+  backed by this real lineage fork — the new run shares its parent's history.
 
 ### Safety as Policy + human-in-the-loop approvals
 
@@ -140,7 +141,7 @@ estimates each LLM call's cost before spending and stops with
 Because the runtime stamps `caused_by` (and the LLM/tool request ids) on
 everything, the README's pitch — "walk the edge back from the patch to the model
 call to the task to the goal" — is a built-in function, `causal_chain()`, surfaced
-in the UI:
+in the UI (example output — model, costs, and event ids vary):
 
 ```
 patch#3 (patch)
@@ -184,9 +185,9 @@ translate at the projection boundary.
 
 ## Lessons learned
 
-- **Let the runtime own the loop.** Moving the LLM/tool loop into `@tool` +
-  `@llm_behavior` deleted ~300 lines of hand-rolled SDK plumbing and made the
-  trace native — which is what makes `causal_chain` real.
+- **Let the runtime own the loop.** Putting the LLM/tool loop in `@tool` +
+  `@llm_behavior` keeps the trace native and avoids hand-rolled provider SDK
+  plumbing — which is what makes `causal_chain` real.
 - **The store is the audit trail.** Attaching `PostgresEventStore` means the
   durable log, replay, and fork are the framework's, not the app's. The UI tables
   are a projection over it; nothing competes to be the source of truth.
@@ -205,8 +206,8 @@ translate at the projection boundary.
 The project is open source. Point it at a Postgres database, add an LLM key (or
 run in demo mode), and submit a goal. The setup steps are in the
 [README](../README.md); the architecture is documented in the
-[tier-1](./tier1-native-event-store.md),
-[tier-2](./tier2-auditability-and-safety.md), and
+[native event store](./native-event-store.md),
+[auditability + safety](./auditability-and-safety.md), and
 [operations](./operating-ag-coder.md) docs.
 
 If you've ever wished your coding agent could _show its work_, this is what that

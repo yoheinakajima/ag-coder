@@ -1,22 +1,14 @@
-# Tier 1 prototype — the runtime owns the LLM + tool loop
+# The runtime owns the LLM + tool loop
 
-> Status: prototype. The deepest of the Tier-1 changes: the agent's core
-> think→act→observe loop now runs _inside_ ActiveGraph instead of in hand-rolled
-> provider SDK code. Demo mode (no key) is unchanged.
+The agent's core think→act→observe loop runs _inside_ ActiveGraph rather than in
+hand-rolled provider SDK code. The LLM and tool calls are native framework events,
+so they're instrumented, cacheable, replayable, and budgeted by the runtime — and
+the causal graph is real `caused_by` lineage rather than a trace reconstructed by
+hand. (Demo mode, with no key, takes a separate scripted path.)
 
-## The problem this addresses
+## How it works
 
-The most important part of a coding agent — the LLM-driven tool loop — used to
-bypass ActiveGraph entirely. `_run_anthropic_loop` / `_run_openai_loop` /
-`_execute_tool_call` hand-rolled the provider SDK: a manual `messages` list,
-manual tool dispatch, and `bgraph.emit("tool.requested", …)` domain events faked
-to look like a trace. None of it flowed through the framework's instrumentation,
-so the "causal graph" was reconstructed by hand and the LLM/tool calls weren't
-cacheable, replayable, or budgeted by the runtime.
-
-## What changed
-
-`scripts/agent/run_agent.py` now uses ActiveGraph's tool + LLM-behavior system:
+`scripts/agent/run_agent.py` uses ActiveGraph's tool + LLM-behavior system:
 
 1. **`@tool`s with Pydantic schemas.** `read_file`, `write_file`, `edit_file`,
    `bash` are first-class `Tool`s with typed input/output (`_build_tools` binds
@@ -42,15 +34,15 @@ cacheable, replayable, or budgeted by the runtime.
    `assistant.message.added` from `llm.responded.raw_text`, so the conversation
    panel stays populated without the behavior emitting it by hand.
 
-5. **Demo mode unchanged.** With no provider, a plain `@behavior` executor runs
-   the deterministic scripted scenario exactly as before. `@llm_behavior` is
-   only registered when a provider exists (it requires one).
-
-Deleted: `_run_llm_mode`, `_run_anthropic_loop`, `_run_openai_loop`,
-`_execute_tool_call`, and the `_TOOL_PROPS` / `_anthropic_tools` /
-`_openai_tools` SDK plumbing (~300 lines).
+5. **Demo mode.** With no provider, a plain `@behavior` executor runs the
+   deterministic scripted scenario. `@llm_behavior` is only registered when a
+   provider exists (it requires one).
 
 ## Verification (local Postgres + live provider)
+
+The walkthrough below is one sample run; costs, model name, and event ids vary by
+provider and goal. What's invariant is that the runtime owns the loop, the
+LLM/tool calls are native events, and the projection rebuilds from the store.
 
 Goal: _"Create a file hello.py that prints 'Hello, ActiveGraph'."_
 
@@ -60,12 +52,13 @@ Goal: _"Create a file hello.py that prints 'Hello, ActiveGraph'."_
 - The handler materialized a `patch` object → the mirror derived the UI's
   `patch.applied` (path `hello.py`, +1 line) and a `model_call` summary.
 - The projection **rebuilds byte-for-byte** from the native store.
-- Demo mode regression: still completes with its 6 objects and `patch.proposed`.
+- Demo mode: still completes with its 6 objects and `patch.proposed`.
 
 ### The auditability payoff
 
 Because the runtime owns the loop and stamps provenance, ActiveGraph's own
-`causal_chain()` now renders the full lineage of a file edit:
+`causal_chain()` renders the full lineage of a file edit (illustrative output —
+model, costs, and event ids vary):
 
 ```
 patch#3 (patch)
@@ -78,9 +71,9 @@ patch#3 (patch)
       ← user (evt_002) goal.created
 ```
 
-This is the README's "show its work" claim made real — and it was not possible
-with the hand-rolled loop, because the LLM and tool calls weren't framework
-events with `caused_by` provenance.
+This is the README's "show its work" claim made real: the LLM and tool calls are
+framework events with `caused_by` provenance, so the chain is the framework's, not
+a hand-built reconstruction.
 
 ## Notes / limitations
 
