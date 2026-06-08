@@ -49,7 +49,12 @@ In `scripts/agent/run_agent.py`:
 
 ## Verification (local Postgres, demo mode)
 
-A demo run produces:
+The figures below are from one sample demo run — exact counts vary by goal,
+model, and provider. What's invariant is the relationship: the native store holds
+the full lifecycle trace, the UI projection is a subset, and the projection
+rebuilds from the store byte-for-byte.
+
+A representative demo run produces:
 
 | Surface                             | Result                                                    |
 | ----------------------------------- | --------------------------------------------------------- |

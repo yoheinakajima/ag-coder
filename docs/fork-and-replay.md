@@ -45,7 +45,12 @@ CLI: `run_agent.py --run-id <new> --goal <g> --fork-from <parent> --at-event <ev
 
 ## Verification (local Postgres, demo mode)
 
-Forking a completed parent at its `task.ready` event (native `evt_008`):
+The figures below are from one sample fork — exact counts and event ids vary by
+run. What's invariant is the lineage: the fork inherits the parent's prefix up to
+the fork point, continues forward from there, and its UI projection rebuilds from
+its own native log.
+
+Forking a completed parent at its `task.ready` event (sample native id `evt_008`):
 
 | Check                               | Result                                                                    |
 | ----------------------------------- | ------------------------------------------------------------------------- |

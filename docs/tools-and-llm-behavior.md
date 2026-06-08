@@ -40,6 +40,10 @@ hand. (Demo mode, with no key, takes a separate scripted path.)
 
 ## Verification (local Postgres + live provider)
 
+The walkthrough below is one sample run; costs, model name, and event ids vary by
+provider and goal. What's invariant is that the runtime owns the loop, the
+LLM/tool calls are native events, and the projection rebuilds from the store.
+
 Goal: _"Create a file hello.py that prints 'Hello, ActiveGraph'."_
 
 - The run **completed** and actually wrote `hello.py` with the right contents.
@@ -53,7 +57,8 @@ Goal: _"Create a file hello.py that prints 'Hello, ActiveGraph'."_
 ### The auditability payoff
 
 Because the runtime owns the loop and stamps provenance, ActiveGraph's own
-`causal_chain()` renders the full lineage of a file edit:
+`causal_chain()` renders the full lineage of a file edit (illustrative output —
+model, costs, and event ids vary):
 
 ```
 patch#3 (patch)

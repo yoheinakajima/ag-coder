@@ -141,7 +141,7 @@ estimates each LLM call's cost before spending and stops with
 Because the runtime stamps `caused_by` (and the LLM/tool request ids) on
 everything, the README's pitch — "walk the edge back from the patch to the model
 call to the task to the goal" — is a built-in function, `causal_chain()`, surfaced
-in the UI:
+in the UI (example output — model, costs, and event ids vary):
 
 ```
 patch#3 (patch)
